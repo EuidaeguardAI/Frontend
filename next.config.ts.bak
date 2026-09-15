@@ -5,20 +5,10 @@ const withVanillaExtract = createVanillaExtractPlugin({
   unstable_turbopack: { mode: "auto" },
 });
 
-// 백엔드(FastAPI)가 다른 호스트/포트에 있으면 BACKEND_ORIGIN으로 덮어쓴다.
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN ?? "http://127.0.0.1:8000";
-
 const nextConfig: NextConfig = {
   // 개발 서버는 기본적으로 localhost가 아닌 오리진의 요청(dev 전용 asset·HMR 등)을 막는다.
   // LAN IP(폰 테스트)와 Cloudflare Quick Tunnel 도메인을 열어줘야 하이드레이션이 정상 동작한다.
   allowedDevOrigins: ["172.30.1.25", "*.trycloudflare.com"],
-
-  // /backend/* 를 FastAPI로 프록시한다. 브라우저에서 보면 동일 오리진 호출이 되므로
-  // 폰에서 Cloudflare 터널로 접속할 때 프론트용 터널 하나만 있으면 된다(백엔드 터널 불필요).
-  // CORS도 타지 않는다.
-  rewrites() {
-    return [{ source: "/backend/:path*", destination: `${BACKEND_ORIGIN}/:path*` }];
-  },
 };
 
 export default withVanillaExtract(nextConfig);

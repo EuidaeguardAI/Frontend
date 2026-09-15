@@ -1,69 +1,85 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+"use client";
 
-export default function Home() {
+import { useRouter } from "next/navigation";
+import { Mic, Clock } from "lucide-react";
+import { MobileFrame } from "@/components/layout/MobileFrame";
+import { BottomNav } from "@/components/ui/BottomNav";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { useProfileStore } from "@/lib/store/profileStore";
+import { useHistoryStore } from "@/lib/store/historyStore";
+import { formatDuration, formatRelativeDay } from "@/lib/format";
+import {
+  brand,
+  emptyState,
+  greeting,
+  header,
+  hero,
+  micCircleInner,
+  micCircleOuter,
+  recentHeading,
+  recentLeft,
+  recentRow,
+} from "./page.css";
+
+export default function HomePage() {
+  const router = useRouter();
+  const profile = useProfileStore((state) => state.profile);
+  const sessions = useHistoryStore((state) => state.sessions);
+  const recent = sessions[0];
+
+  const handleStart = () => {
+    router.push(profile ? "/session/prepare" : "/onboarding");
+  };
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <MobileFrame footer={<BottomNav />}>
+      <div className={header}>
+        <span className={brand}>AI 음성 상담</span>
+      </div>
+
+      <div className={hero}>
+        <p className={greeting}>
+          안녕하세요.
+          <br />
+          무엇을 도와드릴까요?
+        </p>
+        <button
+          type="button"
+          className={micCircleOuter}
+          onClick={handleStart}
+          aria-label="상담 시작"
+        >
+          <span className={micCircleInner}>
+            <Mic size={40} />
+          </span>
+        </button>
+        <Button variant="primary" size="lg" fullWidth onClick={handleStart}>
+          상담 시작
+        </Button>
+      </div>
+
+      <Card>
+        <p className={recentHeading}>최근 상담</p>
+        {recent ? (
+          <div
+            className={recentRow}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push(`/history/${recent.id}`)}
           >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+            <span className={recentLeft}>
+              <Clock size={16} />
+              {recent.title} · {formatRelativeDay(recent.startedAtMs)}
+            </span>
+            {recent.endedAtMs && (
+              <span>{formatDuration(recent.endedAtMs - recent.startedAtMs)}</span>
+            )}
+          </div>
+        ) : (
+          <p className={emptyState}>아직 상담 기록이 없습니다.</p>
+        )}
+      </Card>
+    </MobileFrame>
   );
 }
