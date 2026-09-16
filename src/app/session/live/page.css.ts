@@ -7,6 +7,83 @@ export const topRow = style({
   justifyContent: "space-between",
 });
 
+export const topRowRight = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space.sm,
+});
+
+export const sessionTrigger = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "32px",
+  height: "32px",
+  borderRadius: vars.radius.pill,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+  color: vars.color.text,
+  flexShrink: 0,
+});
+
+export const newSessionButton = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "6px",
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.white,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+});
+
+export const sessionListLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontWeight: 600,
+  marginTop: vars.space.sm,
+});
+
+export const sessionItem = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+  width: "100%",
+  textAlign: "left",
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+});
+
+export const sessionItemActive = style({
+  borderColor: vars.color.primary,
+  background: vars.color.primaryLight,
+});
+
+export const sessionItemTitle = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.text,
+});
+
+export const sessionItemMeta = style({
+  display: "flex",
+  gap: vars.space.xs,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const sessionEmptyState = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  textAlign: "center",
+  padding: vars.space.lg,
+});
+
 const wave = keyframes({
   "0%, 100%": { transform: "scaleY(0.3)" },
   "50%": { transform: "scaleY(1)" },
@@ -143,6 +220,33 @@ export const actionButton = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   fontWeight: 600,
+});
+
+export const turnBlock = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.sm,
+  paddingBottom: vars.space.sm,
+  borderBottom: `1px solid ${vars.color.border}`,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+      paddingBottom: 0,
+    },
+  },
+});
+
+export const turnBlockPast = style({
+  opacity: 0.72,
+});
+
+export const echoCheck = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  color: vars.color.success,
 });
 
 export const editArea = style({

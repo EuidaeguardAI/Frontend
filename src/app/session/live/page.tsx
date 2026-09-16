@@ -3,11 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
   ChevronDown,
   ChevronUp,
+  History,
   Mic,
   MicOff,
   Pencil,
+  Plus,
   PhoneOff,
   Send,
   ShieldAlert,
@@ -18,18 +21,22 @@ import { MobileFrame } from "@/components/layout/MobileFrame";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
+import { Drawer } from "@/components/ui/Drawer";
 import { SectionTitle } from "@/components/ui/SectionTitle";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { consultationClient } from "@/lib/api/consultationClient";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import { useHistoryStore } from "@/lib/store/historyStore";
+import { formatDuration, formatRelativeDay } from "@/lib/format";
 import {
   RISK_LABEL,
   type Recommendation,
   type RiskLevel,
   type TranscriptSegment,
+  type TranscriptSource,
 } from "@/lib/types";
 import { buildFixedSafetyRecommendation } from "@/lib/safety/emergencyRules";
+import { textSimilarity } from "@/lib/text/similarity";
 import { vars } from "@/styles/theme.css";
 import {
   actionBar,
@@ -39,15 +46,27 @@ import {
   citationDetail,
   citationRow,
   disclaimer,
+  echoCheck,
   editArea,
   actionList,
+  newSessionButton,
   quickReplyLabel,
   quickReplyRow,
   recommendationText,
+  sessionEmptyState,
+  sessionItem,
+  sessionItemActive,
+  sessionItemMeta,
+  sessionItemTitle,
+  sessionListLabel,
+  sessionTrigger,
   sourceTag,
   speakerIcon,
   topRow,
+  topRowRight,
   transcriptArea,
+  turnBlock,
+  turnBlockPast,
   twoColActionBar,
   waveBar,
   waveform,
@@ -67,6 +86,13 @@ const RISK_TONE: Record<RiskLevel, "primary" | "warning" | "danger"> = {
 const CHUNK_MS = 10000;
 // 10초 내내 무음이면 파일이 아주 작게 나온다. 그런 조각은 인식에 보내지 않는다.
 const MIN_CHUNK_BYTES = 2000;
+
+// 새로 인식된 발화가 직전 "추천 답변"을 직원이 그대로 읽은 것인지 판단하는 유사도 기준.
+// 마이크가 직원 목소리도 같이 주워서 "손님 말"로 오인되는 걸 막기 위한 것이라 다소 느슨하게 잡는다.
+const ECHO_SIMILARITY_THRESHOLD = 0.6;
+// 새로 생성된 답변이 직전 답변과 사실상 같은 형태인지 판단하는 유사도 기준.
+// 에코 판단보다는 보수적으로 — 진짜 손님 발화에 대한 답인데 우연히 비슷한 경우까지 지우지 않도록.
+const DUPLICATE_SIMILARITY_THRESHOLD = 0.75;
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === "undefined") return "";
@@ -105,8 +131,11 @@ export default function SessionLivePage() {
   const addAction = useSessionStore((state) => state.addAction);
   const toggleMute = useSessionStore((state) => state.toggleMute);
   const completeSession = useSessionStore((state) => state.complete);
+  const resetSession = useSessionStore((state) => state.reset);
   const addHistorySession = useHistoryStore((state) => state.addSession);
+  const historySessions = useHistoryStore((state) => state.sessions);
 
+  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
   const [expandedCitationId, setExpandedCitationId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -117,6 +146,7 @@ export default function SessionLivePage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const manualInputRef = useRef<HTMLTextAreaElement>(null);
 
   const runAnalysis = async (latestText: string) => {
     const current = useSessionStore.getState().session;
@@ -134,13 +164,45 @@ export default function SessionLivePage() {
           .map((recommendation) => recommendation.situation),
         latestText,
       });
-      addRecommendation(recommendation);
-      if (recommendation.isFixedSafetyScript) stoppedRef.current = true;
+      // 손님 발화는 새로 들어왔지만 결과 답변이 직전 답변과 사실상 같은 형태라면
+      // 카드를 또 쌓지 않는다 — 상담원 입장에서는 같은 답변이 반복 노출될 뿐이다.
+      const prevRecommendation = current.recommendations[current.recommendations.length - 1];
+      const isDuplicate =
+        prevRecommendation != null &&
+        prevRecommendation.situation === recommendation.situation &&
+        textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
+          DUPLICATE_SIMILARITY_THRESHOLD;
+      if (!isDuplicate) {
+        addRecommendation(recommendation);
+        if (recommendation.isFixedSafetyScript) stoppedRef.current = true;
+      }
     } catch (error) {
       console.error("[session/live] analyze failed", error);
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  // STT/수동 입력/예상 답변 칩 — 손님 발화로 취급될 모든 입력이 거치는 공통 경로.
+  // 직전 "추천 답변"을 직원이 그대로 읽은 것처럼 들리면(echo) 새 분석 없이 기록만 남긴다.
+  const submitCustomerUtterance = async (text: string, source: TranscriptSource) => {
+    const current = useSessionStore.getState().session;
+    if (!current) return;
+    const latestRecommendation = current.recommendations[current.recommendations.length - 1];
+    const isEcho =
+      latestRecommendation != null &&
+      textSimilarity(text, latestRecommendation.sayNow) >= ECHO_SIMILARITY_THRESHOLD;
+
+    const segment: TranscriptSegment = {
+      id: `segment-${Date.now()}`,
+      source,
+      speaker: isEcho ? "staff" : "customer",
+      text,
+      timestampMs: Date.now() - current.startedAtMs,
+    };
+    appendTranscript(segment);
+    if (isEcho) return;
+    await runAnalysis(text);
   };
 
   // 긴급 버튼으로 진입한 경우: 설문·녹음 없이 고정 안전 절차를 즉시 표시한다.
@@ -208,16 +270,7 @@ export default function SessionLivePage() {
           }
           if (stoppedRef.current || cancelled || !text.trim()) continue;
 
-          const current = useSessionStore.getState().session;
-          const segment: TranscriptSegment = {
-            id: `segment-${Date.now()}`,
-            source: "stt_raw",
-            speaker: "customer",
-            text: text.trim(),
-            timestampMs: current ? Date.now() - current.startedAtMs : 0,
-          };
-          appendTranscript(segment);
-          await runAnalysis(text.trim());
+          await submitCustomerUtterance(text.trim(), "stt_raw");
         }
       } catch (error) {
         console.error("[session/live] mic error", error);
@@ -252,26 +305,76 @@ export default function SessionLivePage() {
   const isFixedSafety = Boolean(latest?.isFixedSafetyScript);
   const showManualInput = !session?.intake.micAvailable || Boolean(micError);
 
-  // 자막과 추천 답변을 하나의 대화 피드로 시간순 병합한다.
-  // 새 추천이 오면 기존 카드를 덮어쓰는 대신 챗봇 히스토리처럼 아래로 쌓인다.
+  // 자막과 추천 답변을 "손님 말 → 답변"이 짝지어진 턴 단위로 묶는다.
+  // 직원이 답변을 그대로 읽어 다시 인식된 구간(speaker: "staff")은 새 턴을 만들지 않고
+  // 직전 턴에 "읽음 확인" 표시만 남긴다.
   const feed = useMemo(() => {
     if (!session) return [];
-    type FeedItem =
+
+    type FeedTurn = {
+      id: string;
+      customerSegments: TranscriptSegment[];
+      recommendation?: Recommendation;
+      echoConfirmed: boolean;
+    };
+
+    type ChronoItem =
       | { kind: "transcript"; ts: number; segment: TranscriptSegment }
       | { kind: "recommendation"; ts: number; recommendation: Recommendation };
-    const items: FeedItem[] = [
+
+    const items: ChronoItem[] = [
       ...session.transcript.map(
-        (segment): FeedItem => ({ kind: "transcript", ts: segment.timestampMs, segment }),
+        (segment): ChronoItem => ({ kind: "transcript", ts: segment.timestampMs, segment }),
       ),
       ...session.recommendations.map(
-        (recommendation): FeedItem => ({
+        (recommendation): ChronoItem => ({
           kind: "recommendation",
           ts: recommendation.createdAtMs,
           recommendation,
         }),
       ),
-    ];
-    return items.sort((a, b) => a.ts - b.ts);
+    ].sort((a, b) => a.ts - b.ts);
+
+    const turns: FeedTurn[] = [];
+    let current: FeedTurn | null = null;
+    const closeCurrent = () => {
+      if (current) turns.push(current);
+      current = null;
+    };
+
+    for (const item of items) {
+      if (item.kind === "transcript" && item.segment.speaker === "staff") {
+        if (current) current.echoConfirmed = true;
+        continue;
+      }
+      if (item.kind === "transcript") {
+        if (current && !current.recommendation) {
+          current.customerSegments.push(item.segment);
+          continue;
+        }
+        closeCurrent();
+        current = {
+          id: item.segment.id,
+          customerSegments: [item.segment],
+          echoConfirmed: false,
+        };
+        continue;
+      }
+      if (current && !current.recommendation) {
+        current.recommendation = item.recommendation;
+        continue;
+      }
+      closeCurrent();
+      current = {
+        id: item.recommendation.id,
+        customerSegments: [],
+        recommendation: item.recommendation,
+        echoConfirmed: false,
+      };
+    }
+    closeCurrent();
+
+    return turns;
   }, [session]);
 
   const speak = (text: string) => {
@@ -310,6 +413,22 @@ export default function SessionLivePage() {
     addAction("상담 계속");
   };
 
+  // 우측 상단 Drawer의 "새 세션 시작": 지금 상담은 기록으로 저장해 두고
+  // 완전히 새로운 대화 세션으로 넘어간다(상담 종료 화면을 거치지 않음).
+  const handleNewSession = () => {
+    stoppedRef.current = true;
+    const completed = completeSession();
+    if (completed) addHistorySession(completed);
+    resetSession();
+    setSessionDrawerOpen(false);
+    router.push("/session/intake");
+  };
+
+  const handleSelectHistorySession = (id: string) => {
+    setSessionDrawerOpen(false);
+    router.push(`/history/${id}`);
+  };
+
   const handleSendWarning = () => {
     addAction("경고 전송");
     setWarningSent(true);
@@ -319,37 +438,26 @@ export default function SessionLivePage() {
     router.push("/session/report");
   };
 
+  const autoResizeManualInput = () => {
+    const el = manualInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
   const handleManualSubmit = async () => {
     const text = manualText.trim();
-    const current = useSessionStore.getState().session;
-    if (!text || !current) return;
-    const segment: TranscriptSegment = {
-      id: `segment-${Date.now()}`,
-      source: "user_input",
-      speaker: "customer",
-      text,
-      timestampMs: Date.now() - current.startedAtMs,
-    };
-    appendTranscript(segment);
+    if (!text) return;
     setManualText("");
-    await runAnalysis(text);
+    if (manualInputRef.current) manualInputRef.current.style.height = "auto";
+    await submitCustomerUtterance(text, "user_input");
   };
 
   // AI가 제시한 "예상 답변" 칩을 눌렀을 때: 직접 타이핑/녹음하지 않고도 그 문장을 손님 발화로
   // 바로 넣어 다음 분석까지 이어간다(수동 입력창에 채운 뒤 전송하는 것과 동일한 동작).
   const handleQuickReply = async (text: string) => {
     if (analyzing) return;
-    const current = useSessionStore.getState().session;
-    if (!current) return;
-    const segment: TranscriptSegment = {
-      id: `segment-${Date.now()}`,
-      source: "user_input",
-      speaker: "customer",
-      text,
-      timestampMs: Date.now() - current.startedAtMs,
-    };
-    appendTranscript(segment);
-    await runAnalysis(text);
+    await submitCustomerUtterance(text, "user_input");
   };
 
   const riskTone = latest ? RISK_TONE[latest.situation] : "primary";
@@ -421,14 +529,67 @@ export default function SessionLivePage() {
           </div>
         )
       }
+      overlay={
+        <Drawer
+          open={sessionDrawerOpen}
+          onClose={() => setSessionDrawerOpen(false)}
+          title="대화 세션"
+        >
+          <button type="button" className={newSessionButton} onClick={handleNewSession}>
+            <Plus size={16} />
+            새 세션 시작
+          </button>
+
+          <p className={sessionListLabel}>진행 중</p>
+          <div className={`${sessionItem} ${sessionItemActive}`}>
+            <span className={sessionItemTitle}>{session.title}</span>
+            <span className={sessionItemMeta}>
+              <span>{formatRelativeDay(session.startedAtMs)}</span>
+              <span>현재 상담</span>
+            </span>
+          </div>
+
+          <p className={sessionListLabel}>지난 세션</p>
+          {historySessions.length === 0 ? (
+            <p className={sessionEmptyState}>지난 상담 기록이 없습니다.</p>
+          ) : (
+            historySessions.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={sessionItem}
+                onClick={() => handleSelectHistorySession(item.id)}
+              >
+                <span className={sessionItemTitle}>{item.title}</span>
+                <span className={sessionItemMeta}>
+                  <span>{formatRelativeDay(item.startedAtMs)}</span>
+                  {item.endedAtMs && (
+                    <span>{formatDuration(item.endedAtMs - item.startedAtMs)}</span>
+                  )}
+                </span>
+              </button>
+            ))
+          )}
+        </Drawer>
+      }
     >
       <div className={topRow}>
         <StatusPill>{muted ? "음소거됨" : summary}</StatusPill>
-        {latest && (
-          <Badge tone={riskTone}>
-            위험도 {latest.riskLevel} · {RISK_LABEL[latest.situation]}
-          </Badge>
-        )}
+        <div className={topRowRight}>
+          {latest && (
+            <Badge tone={riskTone}>
+              위험도 {latest.riskLevel} · {RISK_LABEL[latest.situation]}
+            </Badge>
+          )}
+          <button
+            type="button"
+            className={sessionTrigger}
+            aria-label="대화 세션 목록"
+            onClick={() => setSessionDrawerOpen(true)}
+          >
+            <History size={16} />
+          </button>
+        </div>
       </div>
 
       <div className={waveform} aria-hidden>
@@ -450,63 +611,79 @@ export default function SessionLivePage() {
       <div>
         <SectionTitle>대화</SectionTitle>
         <div className={transcriptArea} ref={scrollRef}>
-          {feed.map((item) =>
-            item.kind === "transcript" ? (
-              <div key={item.segment.id} className={bubbleRow}>
-                <span
-                  className={speakerIcon}
-                  style={{
-                    background:
-                      item.segment.speaker === "ai"
-                        ? vars.color.primaryLight
-                        : vars.color.surfaceMuted,
-                    color:
-                      item.segment.speaker === "ai"
-                        ? vars.color.primary
-                        : vars.color.textMuted,
-                  }}
-                >
-                  <User size={16} />
-                </span>
-                <div>
-                  <p className={bubbleText}>{item.segment.text}</p>
-                  <p className={sourceTag}>
-                    {item.segment.source === "stt_raw" && "실시간 인식"}
-                    {item.segment.source === "ai_corrected" && "AI 분석"}
-                    {item.segment.source === "user_input" && "사용자 입력"}
-                  </p>
-                </div>
+          {feed.map((turn) => {
+            const isLatestTurn = turn.recommendation?.id === latest?.id;
+            return (
+              <div
+                key={turn.id}
+                className={`${turnBlock} ${isLatestTurn ? "" : turnBlockPast}`}
+              >
+                {turn.customerSegments.map((segment) => (
+                  <div key={segment.id} className={bubbleRow}>
+                    <span
+                      className={speakerIcon}
+                      style={{
+                        background:
+                          segment.speaker === "ai"
+                            ? vars.color.primaryLight
+                            : vars.color.surfaceMuted,
+                        color:
+                          segment.speaker === "ai" ? vars.color.primary : vars.color.textMuted,
+                      }}
+                    >
+                      <User size={16} />
+                    </span>
+                    <div>
+                      <p className={bubbleText}>{segment.text}</p>
+                      <p className={sourceTag}>
+                        {segment.source === "stt_raw" && "실시간 인식"}
+                        {segment.source === "ai_corrected" && "AI 분석"}
+                        {segment.source === "user_input" && "사용자 입력"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+
+                {turn.recommendation && (
+                  <RecommendationBubble
+                    recommendation={turn.recommendation}
+                    isLatest={isLatestTurn}
+                    echoConfirmed={turn.echoConfirmed}
+                    editing={editing}
+                    editText={editText}
+                    onEditTextChange={setEditText}
+                    expanded={expandedCitationId === turn.recommendation.id}
+                    onToggleCitations={() =>
+                      setExpandedCitationId((id) =>
+                        id === turn.recommendation!.id ? null : turn.recommendation!.id,
+                      )
+                    }
+                    onQuickReply={handleQuickReply}
+                    quickReplyDisabled={analyzing}
+                  />
+                )}
               </div>
-            ) : (
-              <RecommendationBubble
-                key={item.recommendation.id}
-                recommendation={item.recommendation}
-                isLatest={item.recommendation.id === latest?.id}
-                editing={editing}
-                editText={editText}
-                onEditTextChange={setEditText}
-                expanded={expandedCitationId === item.recommendation.id}
-                onToggleCitations={() =>
-                  setExpandedCitationId((id) =>
-                    id === item.recommendation.id ? null : item.recommendation.id,
-                  )
-                }
-                onQuickReply={handleQuickReply}
-                quickReplyDisabled={analyzing}
-              />
-            ),
-          )}
+            );
+          })}
         </div>
 
         {showManualInput && !isFixedSafety && (
           <div className={manualRow}>
-            <input
+            <textarea
+              ref={manualInputRef}
               className={manualInput}
               placeholder="고객이 한 말을 입력하세요"
               value={manualText}
-              onChange={(event) => setManualText(event.target.value)}
+              rows={1}
+              onChange={(event) => {
+                setManualText(event.target.value);
+                autoResizeManualInput();
+              }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void handleManualSubmit();
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleManualSubmit();
+                }
               }}
             />
             <button
@@ -528,6 +705,7 @@ export default function SessionLivePage() {
 function RecommendationBubble({
   recommendation,
   isLatest,
+  echoConfirmed,
   editing,
   editText,
   onEditTextChange,
@@ -538,6 +716,7 @@ function RecommendationBubble({
 }: {
   recommendation: Recommendation;
   isLatest: boolean;
+  echoConfirmed: boolean;
   editing: boolean;
   editText: string;
   onEditTextChange: (value: string) => void;
@@ -578,6 +757,13 @@ function RecommendationBubble({
 
       {isThreatAlert && (
         <p className={disclaimer}>※ 법률상 확정 판단이 아닌 운영 안내</p>
+      )}
+
+      {echoConfirmed && (
+        <p className={echoCheck}>
+          <Check size={14} />
+          직원이 답변한 것으로 확인됨
+        </p>
       )}
 
       {isLatest && !isFixedSafety && recommendation.expectedReplies.length > 0 && (

@@ -10,10 +10,16 @@ export const manualRow = style({
 export const manualInput = style({
   flex: 1,
   padding: `${vars.space.sm} ${vars.space.md}`,
-  borderRadius: vars.radius.pill,
+  borderRadius: vars.radius.lg,
   border: `1px solid ${vars.color.border}`,
   fontSize: vars.fontSize.sm,
   fontFamily: vars.font.body,
+  resize: "none",
+  overflow: "hidden",
+  maxHeight: "120px",
+  lineHeight: 1.4,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 });
 
 export const manualSendButton = style({

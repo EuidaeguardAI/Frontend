@@ -14,6 +14,7 @@ export const backdrop = style({
 });
 
 export const frame = style({
+  position: "relative",
   width: "100%",
   maxWidth: "430px",
   minHeight: "100dvh",
