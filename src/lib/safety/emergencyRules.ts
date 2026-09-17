@@ -68,6 +68,8 @@ export function buildFixedSafetyRecommendation(
     riskLevel: 5,
     confidence: 0.95,
     sayNow: "지금은 대응하지 않고 거리를 확보하겠습니다.",
+    glanceSummary: "거리 확보 → 관리자 호출 → 필요 시 신고",
+    ttsText: "고객과 거리를 확보하고 관리자 또는 경찰의 도움을 요청하세요.",
     nextActions,
     doNot,
     citations: [

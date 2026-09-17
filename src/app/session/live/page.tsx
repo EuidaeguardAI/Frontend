@@ -1,6 +1,14 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowDown,
@@ -12,6 +20,7 @@ import {
   Pencil,
   PhoneOff,
   Send,
+  Settings2,
   ShieldAlert,
   Sparkles,
   Trash2,
@@ -31,6 +40,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { consultationClient } from "@/lib/api/consultationClient";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import { useHistoryStore } from "@/lib/store/historyStore";
+import { useTtsSettingsStore, type TtsMode } from "@/lib/store/ttsSettingsStore";
 import {
   RISK_LABEL,
   type Recommendation,
@@ -75,12 +85,25 @@ import {
   paneDivider,
   paneHandle,
   paneHandleLabel,
+  glanceActions,
+  glanceCard,
+  glanceCardTitle,
+  glanceStep,
+  glanceSteps,
+  inlineActionButton,
+  scriptBlock,
+  scriptLabel,
   quickReplyLabel,
   quickReplyRow,
   recommendationText,
   sourceTag,
   speakerIcon,
   statusBar,
+  ttsMenu,
+  ttsMenuBody,
+  ttsMenuRow,
+  ttsMenuSummary,
+  ttsUnsupported,
   topRow,
   transcriptEmpty,
   transcriptPane,
@@ -110,6 +133,12 @@ const ECHO_SIMILARITY_THRESHOLD = 0.6;
 const DUPLICATE_SIMILARITY_THRESHOLD = 0.75;
 // 인식 결과가 이보다 짧으면 "잘못 들었을 수 있음"으로 표시한다(분석은 그대로 한다).
 const LOW_CONFIDENCE_TEXT_LENGTH = 6;
+
+const subscribeToTtsSupport = () => () => undefined;
+const getTtsSupportSnapshot = () =>
+  typeof window !== "undefined" &&
+  "speechSynthesis" in window &&
+  "SpeechSynthesisUtterance" in window;
 
 type PaneSize = "sm" | "md" | "lg";
 const PANE_SIZE_ORDER: PaneSize[] = ["sm", "md", "lg"];
@@ -158,10 +187,17 @@ export default function SessionLivePage() {
   const toggleMute = useSessionStore((state) => state.toggleMute);
   const completeSession = useSessionStore((state) => state.complete);
   const addHistorySession = useHistoryStore((state) => state.addSession);
+  const ttsEnabled = useTtsSettingsStore((state) => state.ttsEnabled);
+  const ttsMode = useTtsSettingsStore((state) => state.ttsMode);
+  const ttsAutoPlay = useTtsSettingsStore((state) => state.ttsAutoPlay);
+  const setTtsEnabled = useTtsSettingsStore((state) => state.setTtsEnabled);
+  const setTtsMode = useTtsSettingsStore((state) => state.setTtsMode);
+  const setTtsAutoPlay = useTtsSettingsStore((state) => state.setTtsAutoPlay);
 
   // 아래 세 가지는 "어느 답변에 대한 상태인지"를 함께 들고 있는다. 새 답변이 오면
   // 그 id가 더 이상 맞지 않게 되어 자동으로 초기 상태로 돌아간다(effect에서 초기화하지 않는다).
   const [detailsOpenFor, setDetailsOpenFor] = useState<string | null>(null);
+  const [scriptOpenFor, setScriptOpenFor] = useState<string | null>(null);
   const [editingFor, setEditingFor] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [warningSent, setWarningSent] = useState(false);
@@ -176,6 +212,11 @@ export default function SessionLivePage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // 지금 말소리가 들어오고 있는지(상태 문구용). 레벨 미터는 리렌더 없이 따로 그린다.
   const [hearing, setHearing] = useState(false);
+  const ttsSupported = useSyncExternalStore(
+    subscribeToTtsSupport,
+    getTtsSupportSnapshot,
+    () => false,
+  );
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const answerRef = useRef<HTMLDivElement>(null);
@@ -188,6 +229,8 @@ export default function SessionLivePage() {
   // 분석 요청 순번. 분석을 더 이상 기다리지 않고 녹음을 이어가므로 두 분석이 겹칠 수 있는데,
   // 그때 늦게 끝난 옛 요청이 최신 답변을 덮어쓰지 않도록 순번으로 막는다.
   const analysisSeqRef = useRef(0);
+  // 설정 변경이나 리렌더가 같은 추천을 다시 읽게 하지 않도록, 도착 자체를 한 번만 관찰한다.
+  const lastObservedTtsRecommendationRef = useRef<string | null>(null);
 
   const runAnalysis = async (latestText: string) => {
     const current = useSessionStore.getState().session;
@@ -383,6 +426,41 @@ export default function SessionLivePage() {
   const recommendations = useMemo(() => session?.recommendations ?? [], [session]);
   const latest = recommendations[recommendations.length - 1];
 
+  const speak = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(trimmed);
+    utterance.lang = "ko-KR";
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // 자동 재생은 새 추천이 도착한 순간 한 번만 실행한다. 고정 안전 절차는 항상 수동 재생만 허용한다.
+  useEffect(() => {
+    if (!latest || lastObservedTtsRecommendationRef.current === latest.id) return;
+    lastObservedTtsRecommendationRef.current = latest.id;
+    const suppressAutoPlay =
+      latest.isFixedSafetyScript ||
+      latest.situation === "threat" ||
+      latest.situation === "emergency";
+    if (suppressAutoPlay) {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      return;
+    }
+    if (!ttsSupported || !ttsEnabled || !ttsAutoPlay) return;
+    speak(ttsMode === "coach" ? latest.ttsText?.trim() || latest.sayNow : latest.sayNow);
+  }, [latest, speak, ttsAutoPlay, ttsEnabled, ttsMode, ttsSupported]);
+
   // 보고 있는 답변이 바뀌면 답변 패널은 맨 위부터 보여준다.
   useEffect(() => {
     answerRef.current?.scrollTo({ top: 0 });
@@ -490,15 +568,6 @@ export default function SessionLivePage() {
   const editing = editingFor != null && editingFor === latest?.id;
   const detailsOpen = detailsOpenFor != null && detailsOpenFor === shown?.id;
 
-  const speak = (text: string) => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "ko-KR";
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
   const handleEditToggle = () => {
     if (!latest) return;
     if (editing) {
@@ -511,10 +580,16 @@ export default function SessionLivePage() {
     setEditingFor(latest.id);
   };
 
-  const handleSpeakClick = () => {
+  const handleCustomerSpeakClick = () => {
     if (!shown) return;
     speak(editing && isShowingLatest ? editText : shown.sayNow);
-    addAction("음성으로 답변");
+    addAction("고객에게 읽기");
+  };
+
+  const handleCoachSpeakClick = () => {
+    if (!shown) return;
+    speak(shown.ttsText?.trim() || shown.sayNow);
+    addAction("직원 안내 듣기");
   };
 
   const handleMuteClick = () => {
@@ -524,6 +599,9 @@ export default function SessionLivePage() {
 
   const handleEnd = () => {
     stoppedRef.current = true;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     const completed = completeSession();
     if (completed) addHistorySession(completed);
     router.push("/session/complete");
@@ -661,10 +739,6 @@ export default function SessionLivePage() {
                 <Pencil size={18} />
                 수정
               </button>
-              <button type="button" className={actionButton} onClick={handleSpeakClick}>
-                <Volume2 size={18} />
-                음성으로 답변
-              </button>
               <button type="button" className={actionButton} onClick={handleMuteClick}>
                 {muted ? <MicOff size={18} /> : <Mic size={18} />}
                 음소거
@@ -686,6 +760,42 @@ export default function SessionLivePage() {
       <div className={statusBar}>
         <StatusPill>{statusText}</StatusPill>
         {!showManualInput && <LevelMeter getLevel={getLevel} muted={muted} />}
+        <details className={ttsMenu}>
+          <summary className={ttsMenuSummary} title="음성 안내 설정">
+            <Settings2 size={14} />
+            TTS · {ttsMode === "coach" ? "직원" : "고객"}
+          </summary>
+          <div className={ttsMenuBody}>
+            <label className={ttsMenuRow}>
+              <input
+                type="checkbox"
+                checked={ttsEnabled}
+                onChange={(event) => setTtsEnabled(event.target.checked)}
+              />
+              TTS 사용
+            </label>
+            <label className={ttsMenuRow}>
+              자동 재생 모드
+              <select
+                value={ttsMode}
+                onChange={(event) => setTtsMode(event.target.value as TtsMode)}
+              >
+                <option value="coach">직원 안내</option>
+                <option value="customer">고객 응대</option>
+              </select>
+            </label>
+            <label className={ttsMenuRow}>
+              <input
+                type="checkbox"
+                checked={ttsAutoPlay}
+                disabled={!ttsEnabled}
+                onChange={(event) => setTtsAutoPlay(event.target.checked)}
+              />
+              새 추천 자동 재생
+            </label>
+            {!ttsSupported && <span className={ttsUnsupported}>이 브라우저는 TTS를 지원하지 않습니다.</span>}
+          </div>
+        </details>
         {shown && (
           <Badge tone={riskTone}>
             위험도 {shown.riskLevel} · {RISK_LABEL[shown.situation]}
@@ -810,11 +920,18 @@ export default function SessionLivePage() {
               editText={editText}
               onEditTextChange={setEditText}
               detailsOpen={detailsOpen}
+              scriptOpen={editing || scriptOpenFor === shown.id}
+              onToggleScript={() =>
+                setScriptOpenFor((id) => (id === shown.id ? null : shown.id))
+              }
               onToggleDetails={() =>
                 setDetailsOpenFor((id) => (id === shown.id ? null : shown.id))
               }
               onQuickReply={handleQuickReply}
               quickReplyDisabled={analyzing}
+              ttsSupported={ttsSupported}
+              onListenCoach={handleCoachSpeakClick}
+              onReadCustomer={handleCustomerSpeakClick}
             />
           </>
         ) : (
@@ -876,9 +993,14 @@ function AnswerCard({
   editText,
   onEditTextChange,
   detailsOpen,
+  scriptOpen,
+  onToggleScript,
   onToggleDetails,
   onQuickReply,
   quickReplyDisabled,
+  ttsSupported,
+  onListenCoach,
+  onReadCustomer,
 }: {
   recommendation: Recommendation;
   isLatest: boolean;
@@ -887,15 +1009,25 @@ function AnswerCard({
   editText: string;
   onEditTextChange: (value: string) => void;
   detailsOpen: boolean;
+  scriptOpen: boolean;
+  onToggleScript: () => void;
   onToggleDetails: () => void;
   onQuickReply: (text: string) => void;
   quickReplyDisabled: boolean;
+  ttsSupported: boolean;
+  onListenCoach: () => void;
+  onReadCustomer: () => void;
 }) {
   const isFixedSafety = recommendation.isFixedSafetyScript;
   const isThreatAlert = recommendation.situation === "threat" && !isFixedSafety;
   const tone = isFixedSafety ? "danger" : isThreatAlert ? "warning" : "primary";
   const hasDetails =
     recommendation.nextActions.length > 0 || recommendation.citations.length > 0;
+  const glanceItems = (recommendation.glanceSummary?.trim() || recommendation.sayNow)
+    .split("→")
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, 3);
 
   return (
     <div className={answerCard[tone]}>
@@ -906,14 +1038,63 @@ function AnswerCard({
         {!isLatest && <span className={sourceTag}>이전 답변</span>}
       </div>
 
-      {editing ? (
-        <textarea
-          className={editArea}
-          value={editText}
-          onChange={(event) => onEditTextChange(event.target.value)}
-        />
-      ) : (
-        <p className={recommendationText}>{recommendation.sayNow}</p>
+      <section className={glanceCard[tone]} aria-label="지금 할 일">
+        <p className={glanceCardTitle}>지금 할 일</p>
+        <ol className={glanceSteps}>
+          {glanceItems.map((step, index) => (
+            <li key={`${index}-${step}`} className={glanceStep}>
+              {step}
+            </li>
+          ))}
+        </ol>
+        <div className={glanceActions}>
+          <button
+            type="button"
+            className={inlineActionButton}
+            onClick={onToggleScript}
+            disabled={editing}
+          >
+            {editing ? "전체 멘트 수정 중" : scriptOpen ? "전체 멘트 닫기" : "전체 멘트 보기"}
+          </button>
+          <button
+            type="button"
+            className={inlineActionButton}
+            onClick={onListenCoach}
+            disabled={!ttsSupported}
+            title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+          >
+            <Volume2 size={14} />
+            직원 안내 듣기
+          </button>
+          <button
+            type="button"
+            className={inlineActionButton}
+            onClick={onReadCustomer}
+            disabled={!ttsSupported}
+            title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+          >
+            <Volume2 size={14} />
+            고객에게 읽기
+          </button>
+        </div>
+        {!ttsSupported && (
+          <p className={ttsUnsupported}>이 브라우저는 음성 읽기를 지원하지 않습니다.</p>
+        )}
+      </section>
+
+      {scriptOpen && (
+        <div className={scriptBlock}>
+          <p className={scriptLabel}>고객 응대 전체 멘트</p>
+          {editing ? (
+            <textarea
+              className={editArea}
+              value={editText}
+              onChange={(event) => onEditTextChange(event.target.value)}
+            />
+          ) : (
+            <p className={recommendationText}>{recommendation.sayNow}</p>
+          )}
+        </div>
       )}
 
       {isThreatAlert && <p className={disclaimer}>※ 법률상 확정 판단이 아닌 운영 안내</p>}

@@ -50,6 +50,10 @@ export interface Recommendation {
   riskLevel: number; // 1~5
   confidence: number; // 0~1
   sayNow: string;
+  /** 과거 저장 데이터에는 없을 수 있으며, 이 경우 화면은 sayNow를 사용한다. */
+  glanceSummary?: string;
+  /** 과거 저장 데이터에는 없을 수 있으며, 이 경우 직원 안내도 sayNow를 읽는다. */
+  ttsText?: string;
   nextActions: string[];
   doNot: string[];
   citations: Citation[];

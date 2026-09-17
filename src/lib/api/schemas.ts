@@ -16,8 +16,17 @@ export interface AnalyzeRequestBody {
   latestText: string;
 }
 
+/** 새 API 응답은 두 보조 문구를 항상 포함한다. 앱의 Recommendation은 과거 저장 데이터 때문에 선택값이다. */
+export type RecommendationResponseBody = Omit<
+  Recommendation,
+  "glanceSummary" | "ttsText"
+> & {
+  glanceSummary: string;
+  ttsText: string;
+};
+
 export interface AnalyzeResponseBody {
-  recommendation: Recommendation;
+  recommendation: RecommendationResponseBody;
 }
 
 export interface SttResponseBody {
