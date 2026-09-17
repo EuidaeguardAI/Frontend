@@ -4,19 +4,27 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  History,
+  Plus,
   Send,
   ShieldAlert,
   Trash2,
   Volume2,
 } from "lucide-react";
 import { MobileFrame } from "@/components/layout/MobileFrame";
+import {
+  CitationList,
+  citationSummary,
+} from "@/components/session/CitationList";
 import { Badge } from "@/components/ui/Badge";
 import { BottomNav } from "@/components/ui/BottomNav";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
+import { Drawer } from "@/components/ui/Drawer";
 import { SectionTitle } from "@/components/ui/SectionTitle";
 import { consultationClient } from "@/lib/api/consultationClient";
-import { useAssistantStore } from "@/lib/store/assistantStore";
+import { formatRelativeDay } from "@/lib/format";
+import { EMPTY_MESSAGES, useAssistantStore } from "@/lib/store/assistantStore";
 import { useProfileStore } from "@/lib/store/profileStore";
 import { RISK_LABEL, type AskAnswer, type RiskLevel } from "@/lib/types";
 import {
@@ -35,13 +43,24 @@ import {
   emptyWrap,
   errorText,
   feed,
+  headerLeft,
   headerRow,
+  newChatButton,
   pendingDot,
   pendingRow,
   sayNowBox,
   sayNowLabel,
   sayNowText,
   sendButton,
+  sessionDeleteButton,
+  sessionEmptyState,
+  sessionItem,
+  sessionItemActive,
+  sessionItemMeta,
+  sessionItemTitle,
+  sessionListLabel,
+  sessionRow,
+  sessionTrigger,
   speakButton,
   suggestionChip,
   suggestionList,
@@ -70,15 +89,25 @@ const HISTORY_TURNS = 6;
 
 export default function AssistantPage() {
   const profile = useProfileStore((state) => state.profile);
-  const messages = useAssistantStore((state) => state.messages);
+  const sessions = useAssistantStore((state) => state.sessions);
+  const activeId = useAssistantStore((state) => state.activeId);
   const append = useAssistantStore((state) => state.append);
   const clear = useAssistantStore((state) => state.clear);
+  const startNewChat = useAssistantStore((state) => state.startNewChat);
+  const selectSession = useAssistantStore((state) => state.selectSession);
+  const removeSession = useAssistantStore((state) => state.removeSession);
+
+  const activeSession = sessions.find((item) => item.id === activeId) ?? null;
+  const messages = activeSession?.messages ?? EMPTY_MESSAGES;
+  const pastSessions = sessions.filter((item) => item.id !== activeId);
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // 스토어는 skipHydration으로 만들어 뒀다(assistantStore 참고). 화면이 붙은 뒤에 꺼낸다.
   useEffect(() => {
@@ -88,6 +117,17 @@ export default function AssistantPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, pending]);
+
+  // 줄이 넘치면 다음 줄로 내려가는 만큼 입력창도 같이 늘어나야 가린 글자가 없다.
+  // 최대 높이(다섯 줄)를 넘기면 CSS가 잘라 주고 그때부터 입력창 안에서 스크롤된다.
+  useEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    // scrollHeight에는 테두리가 빠져 있는데 box-sizing이 border-box라 그만큼 더해 준다.
+    const borderHeight = element.offsetHeight - element.clientHeight;
+    element.style.height = `${element.scrollHeight + borderHeight}px`;
+  }, [draft]);
 
   const send = async (question: string) => {
     const text = question.trim();
@@ -104,9 +144,10 @@ export default function AssistantPage() {
     setPending(true);
 
     try {
-      const history = useAssistantStore
-        .getState()
-        .messages.slice(-HISTORY_TURNS - 1, -1)
+      const state = useAssistantStore.getState();
+      const current = state.sessions.find((item) => item.id === state.activeId);
+      const history = (current?.messages ?? [])
+        .slice(-HISTORY_TURNS - 1, -1)
         .map((message) =>
           message.role === "user"
             ? { role: "user" as const, content: message.text }
@@ -142,20 +183,40 @@ export default function AssistantPage() {
     setExpandedId(null);
   };
 
+  // Drawer의 "새 채팅": 지금 대화는 목록에 그대로 남겨 두고 빈 화면에서 다시 시작한다.
+  const handleNewChat = () => {
+    startNewChat();
+    setDraft("");
+    setError(null);
+    setExpandedId(null);
+    setSessionDrawerOpen(false);
+  };
+
+  const handleSelectSession = (id: string) => {
+    selectSession(id);
+    setError(null);
+    setExpandedId(null);
+    setSessionDrawerOpen(false);
+  };
+
   return (
     <MobileFrame
       footer={
         <>
           <div className={composer}>
-            <input
+            <textarea
+              ref={inputRef}
               className={composerInput}
               placeholder="어떻게 해야 할지 물어보세요"
+              rows={1}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                  void send(draft);
-                }
+                if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                // Shift+Enter는 직접 줄을 바꾸고, 그냥 Enter는 전송한다.
+                if (event.shiftKey) return;
+                event.preventDefault();
+                void send(draft);
               }}
             />
             <button
@@ -171,9 +232,77 @@ export default function AssistantPage() {
           <BottomNav />
         </>
       }
+      overlay={
+        <Drawer
+          open={sessionDrawerOpen}
+          onClose={() => setSessionDrawerOpen(false)}
+          title="대화 목록"
+          side="left"
+        >
+          <button type="button" className={newChatButton} onClick={handleNewChat}>
+            <Plus size={16} />
+            새 채팅
+          </button>
+
+          {activeSession && (
+            <>
+              <p className={sessionListLabel}>진행 중</p>
+              {/* sessionItem은 목록 행 안에서 폭을 채우는 스타일이라 여기서도 같은 행으로 감싼다. */}
+              <div className={sessionRow}>
+                <div className={`${sessionItem} ${sessionItemActive}`}>
+                  <span className={sessionItemTitle}>{activeSession.title}</span>
+                  <span className={sessionItemMeta}>
+                    <span>{formatRelativeDay(activeSession.updatedAtMs)}</span>
+                    <span>메시지 {activeSession.messages.length}개</span>
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+
+          <p className={sessionListLabel}>지난 대화</p>
+          {pastSessions.length === 0 ? (
+            <p className={sessionEmptyState}>저장된 대화가 없습니다.</p>
+          ) : (
+            pastSessions.map((item) => (
+              <div key={item.id} className={sessionRow}>
+                <button
+                  type="button"
+                  className={sessionItem}
+                  onClick={() => handleSelectSession(item.id)}
+                >
+                  <span className={sessionItemTitle}>{item.title}</span>
+                  <span className={sessionItemMeta}>
+                    <span>{formatRelativeDay(item.updatedAtMs)}</span>
+                    <span>메시지 {item.messages.length}개</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={sessionDeleteButton}
+                  aria-label="대화 삭제"
+                  onClick={() => removeSession(item.id)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))
+          )}
+        </Drawer>
+      }
     >
       <div className={headerRow}>
-        <SectionTitle>물어보기</SectionTitle>
+        <div className={headerLeft}>
+          <button
+            type="button"
+            className={sessionTrigger}
+            aria-label="대화 목록"
+            onClick={() => setSessionDrawerOpen(true)}
+          >
+            <History size={16} />
+          </button>
+          <SectionTitle>물어보기</SectionTitle>
+        </div>
         {messages.length > 0 && (
           <button type="button" className={clearButton} onClick={handleClear}>
             <Trash2 size={14} />
@@ -337,21 +466,18 @@ function AnswerCard({
       {answer.citations.length > 0 && (
         <>
           <div className={citationRow} onClick={onToggleCitations}>
-            <span>
-              답변 근거 · {answer.citations[0].label}
-              {answer.citations[0].section ? ` ${answer.citations[0].section}` : ""}
-            </span>
+            <span>답변 근거 · {citationSummary(answer.citations)}</span>
             {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </div>
           {expanded && (
-            <div className={citationDetail}>
-              {answer.citations.map((citation) => (
-                <p key={citation.label + citation.section}>
-                  {citation.label} {citation.section}
-                </p>
-              ))}
-              {answer.needsHumanReview && <p>관리자·전문가 확인이 필요한 내용입니다.</p>}
-            </div>
+            <CitationList
+              citations={answer.citations}
+              note={
+                answer.needsHumanReview
+                  ? "관리자·전문가 확인이 필요한 내용입니다."
+                  : undefined
+              }
+            />
           )}
         </>
       )}

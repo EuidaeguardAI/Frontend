@@ -191,20 +191,31 @@ export const errorText = style({
 
 export const composer = style({
   display: "flex",
+  alignItems: "flex-end",
   gap: vars.space.xs,
   padding: `${vars.space.sm} ${vars.space.md}`,
   borderTop: `1px solid ${vars.color.border}`,
   background: vars.color.white,
 });
 
+// 입력창은 다섯 줄까지 따라 늘어나고, 그 이상은 입력창 안에서 스크롤한다.
+const COMPOSER_MAX_LINES = 5;
+const COMPOSER_LINE_HEIGHT = 1.5;
+
 export const composerInput = style({
   flex: 1,
   padding: `${vars.space.sm} ${vars.space.md}`,
-  borderRadius: vars.radius.pill,
+  borderRadius: vars.radius.xl,
   border: `1px solid ${vars.color.border}`,
   fontSize: vars.fontSize.md,
   fontFamily: vars.font.body,
   minWidth: 0,
+  display: "block",
+  resize: "none",
+  lineHeight: COMPOSER_LINE_HEIGHT,
+  // 글자 다섯 줄 + 위아래 여백 + 테두리. box-sizing이 border-box라 전부 더해 준다.
+  maxHeight: `calc(${COMPOSER_MAX_LINES} * ${COMPOSER_LINE_HEIGHT} * ${vars.fontSize.md} + 2 * ${vars.space.sm} + 2px)`,
+  overflowY: "auto",
 });
 
 export const sendButton = style({
@@ -221,4 +232,103 @@ export const sendButton = style({
   selectors: {
     "&:disabled": { opacity: 0.4, cursor: "not-allowed" },
   },
+});
+
+export const headerLeft = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space.xs,
+});
+
+export const sessionTrigger = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "32px",
+  height: "32px",
+  borderRadius: vars.radius.pill,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+  color: vars.color.text,
+  flexShrink: 0,
+});
+
+export const newChatButton = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "6px",
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.white,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+});
+
+export const sessionListLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontWeight: 600,
+  marginTop: vars.space.sm,
+});
+
+export const sessionRow = style({
+  display: "flex",
+  alignItems: "stretch",
+  gap: vars.space.xxs,
+});
+
+export const sessionItem = style({
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+  textAlign: "left",
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+});
+
+export const sessionItemActive = style({
+  borderColor: vars.color.primary,
+  background: vars.color.primaryLight,
+});
+
+export const sessionItemTitle = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.text,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+});
+
+export const sessionItemMeta = style({
+  display: "flex",
+  gap: vars.space.xs,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const sessionDeleteButton = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "32px",
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+  color: vars.color.textFaint,
+  flexShrink: 0,
+});
+
+export const sessionEmptyState = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  textAlign: "center",
+  padding: vars.space.lg,
 });

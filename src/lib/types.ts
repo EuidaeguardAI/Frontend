@@ -165,3 +165,12 @@ export interface AskAnswer {
 export type AskChatMessage =
   | { id: string; role: "user"; text: string; createdAtMs: number }
   | { id: string; role: "assistant"; answer: AskAnswer; createdAtMs: number };
+
+/** '물어보기' 탭의 대화 한 건. Drawer의 세션 목록에 그대로 올라간다. */
+export interface AskChatSession {
+  id: string;
+  title: string;
+  messages: AskChatMessage[];
+  createdAtMs: number;
+  updatedAtMs: number;
+}
