@@ -16,6 +16,55 @@ export const statusBar = style({
   flexShrink: 0,
 });
 
+export const responseModeBar = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space.xs,
+  flexShrink: 0,
+  padding: "6px 8px",
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.surface,
+});
+
+export const responseModeLabel = style({
+  fontSize: "11px",
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const responseModeSegments = style({
+  display: "inline-flex",
+  padding: "2px",
+  borderRadius: vars.radius.pill,
+  background: vars.color.surfaceMuted,
+});
+
+const responseModeButtonBase = style({
+  padding: "4px 10px",
+  border: "none",
+  borderRadius: vars.radius.pill,
+  fontSize: "11px",
+  fontWeight: 700,
+  cursor: "pointer",
+});
+
+export const responseModeButton = styleVariants({
+  inactive: [responseModeButtonBase, { background: "transparent", color: vars.color.textMuted }],
+  active: [
+    responseModeButtonBase,
+    { background: vars.color.primary, color: vars.color.white },
+  ],
+});
+
+export const responseModeHint = style({
+  marginLeft: "auto",
+  fontSize: "11px",
+  color: vars.color.textFaint,
+  '@media': { 'screen and (max-width: 420px)': { marginLeft: 0 } },
+});
+
 export const ttsMenu = style({
   position: "relative",
   flexShrink: 0,
@@ -391,6 +440,28 @@ export const glanceActions = style({
   gap: vars.space.xs,
 });
 
+export const compactEvidence = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.xs,
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  background: vars.color.surface,
+  border: `1px solid ${vars.color.border}`,
+});
+
+export const compactEvidenceTitle = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const noEvidence = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  lineHeight: 1.6,
+});
+
 export const inlineActionButton = style({
   display: "inline-flex",
   alignItems: "center",
@@ -428,6 +499,17 @@ export const actionList = style({
   lineHeight: 1.7,
   paddingLeft: vars.space.md,
 });
+
+export const detailLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const doNotList = style([
+  actionList,
+  { color: vars.color.danger },
+]);
 
 // 다음 행동·근거는 기본으로 접어 둔다. 첫 화면에서 답변 문장과 예상 답변만 보이게 해
 // 카드 높이를 낮추는 것이 이 화면의 핵심이다.

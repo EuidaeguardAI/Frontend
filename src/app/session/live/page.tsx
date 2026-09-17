@@ -30,7 +30,6 @@ import {
 import { MobileFrame } from "@/components/layout/MobileFrame";
 import {
   CitationList,
-  citationSummary,
 } from "@/components/session/CitationList";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
@@ -40,10 +39,12 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { consultationClient } from "@/lib/api/consultationClient";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import { useHistoryStore } from "@/lib/store/historyStore";
+import { useResponseModeStore } from "@/lib/store/responseModeStore";
 import { useTtsSettingsStore, type TtsMode } from "@/lib/store/ttsSettingsStore";
 import {
   RISK_LABEL,
   type Recommendation,
+  type ResponseMode,
   type RiskLevel,
   type TranscriptSegment,
   type TranscriptSource,
@@ -75,13 +76,18 @@ import {
   deleteButton,
   deleteRow,
   detailBody,
+  detailLabel,
   detailToggle,
+  compactEvidence,
+  compactEvidenceTitle,
   disclaimer,
+  doNotList,
   echoCheck,
   echoTag,
   editArea,
   meter,
   meterBar,
+  noEvidence,
   paneDivider,
   paneHandle,
   paneHandleLabel,
@@ -96,6 +102,11 @@ import {
   quickReplyLabel,
   quickReplyRow,
   recommendationText,
+  responseModeBar,
+  responseModeButton,
+  responseModeHint,
+  responseModeLabel,
+  responseModeSegments,
   sourceTag,
   speakerIcon,
   statusBar,
@@ -187,6 +198,8 @@ export default function SessionLivePage() {
   const toggleMute = useSessionStore((state) => state.toggleMute);
   const completeSession = useSessionStore((state) => state.complete);
   const addHistorySession = useHistoryStore((state) => state.addSession);
+  const responseMode = useResponseModeStore((state) => state.responseMode);
+  const setResponseMode = useResponseModeStore((state) => state.setResponseMode);
   const ttsEnabled = useTtsSettingsStore((state) => state.ttsEnabled);
   const ttsMode = useTtsSettingsStore((state) => state.ttsMode);
   const ttsAutoPlay = useTtsSettingsStore((state) => state.ttsAutoPlay);
@@ -249,6 +262,8 @@ export default function SessionLivePage() {
           .slice(-4)
           .map((recommendation) => recommendation.situation),
         latestText,
+        // 녹음 effect의 오래된 클로저가 아니라 요청 직전 persist store의 최신값을 읽는다.
+        responseMode: useResponseModeStore.getState().responseMode,
       });
       // 이 요청이 도는 사이 더 최신 발화에 대한 분석이 시작됐다면 이 결과는 버린다.
       if (seq !== analysisSeqRef.current) return;
@@ -258,6 +273,7 @@ export default function SessionLivePage() {
       const prevRecommendation = store?.recommendations[store.recommendations.length - 1];
       const isDuplicate =
         prevRecommendation != null &&
+        (prevRecommendation.responseMode ?? "full") === recommendation.responseMode &&
         prevRecommendation.situation === recommendation.situation &&
         textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
           DUPLICATE_SIMILARITY_THRESHOLD;
@@ -319,7 +335,10 @@ export default function SessionLivePage() {
       current.recommendations.length === 0
     ) {
       addRecommendation({
-        ...buildFixedSafetyRecommendation(),
+        ...buildFixedSafetyRecommendation(
+          "",
+          useResponseModeStore.getState().responseMode,
+        ),
         id: `rec-${Date.now()}`,
         createdAtMs: Date.now() - session.startedAtMs,
       });
@@ -803,6 +822,11 @@ export default function SessionLivePage() {
         )}
       </div>
 
+      <ResponseModeSelector
+        value={responseMode}
+        onChange={setResponseMode}
+      />
+
       {micError && (
         <Card tone="warning">
           <p className={sourceTag}>{micError}</p>
@@ -944,6 +968,38 @@ export default function SessionLivePage() {
   );
 }
 
+function ResponseModeSelector({
+  value,
+  onChange,
+}: {
+  value: ResponseMode;
+  onChange: (mode: ResponseMode) => void;
+}) {
+  return (
+    <div className={responseModeBar}>
+      <span className={responseModeLabel}>응답 방식</span>
+      <div className={responseModeSegments} role="radiogroup" aria-label="응답 방식">
+        {([
+          ["full", "긴 응대"],
+          ["compact", "짧은 안내"],
+        ] as const).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={value === mode}
+            className={responseModeButton[value === mode ? "active" : "inactive"]}
+            onClick={() => onChange(mode)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className={responseModeHint}>다음 추천부터 적용</span>
+    </div>
+  );
+}
+
 /**
  * 마이크 입력 레벨 미터. 값이 초당 수십 번 바뀌므로 React 상태로 두면 화면 전체가 계속
  * 리렌더된다. 그래서 막대의 transform만 직접 건드린다.
@@ -1020,9 +1076,11 @@ function AnswerCard({
 }) {
   const isFixedSafety = recommendation.isFixedSafetyScript;
   const isThreatAlert = recommendation.situation === "threat" && !isFixedSafety;
+  const responseMode = recommendation.responseMode ?? "full";
+  const isCompact = responseMode === "compact";
   const tone = isFixedSafety ? "danger" : isThreatAlert ? "warning" : "primary";
   const hasDetails =
-    recommendation.nextActions.length > 0 || recommendation.citations.length > 0;
+    recommendation.nextActions.length > 0 || recommendation.doNot.length > 0;
   const glanceItems = (recommendation.glanceSummary?.trim() || recommendation.sayNow)
     .split("→")
     .map((step) => step.trim())
@@ -1038,51 +1096,123 @@ function AnswerCard({
         {!isLatest && <span className={sourceTag}>이전 답변</span>}
       </div>
 
-      <section className={glanceCard[tone]} aria-label="지금 할 일">
-        <p className={glanceCardTitle}>지금 할 일</p>
-        <ol className={glanceSteps}>
-          {glanceItems.map((step, index) => (
-            <li key={`${index}-${step}`} className={glanceStep}>
-              {step}
-            </li>
-          ))}
-        </ol>
-        <div className={glanceActions}>
-          <button
-            type="button"
-            className={inlineActionButton}
-            onClick={onToggleScript}
-            disabled={editing}
-          >
-            {editing ? "전체 멘트 수정 중" : scriptOpen ? "전체 멘트 닫기" : "전체 멘트 보기"}
-          </button>
-          <button
-            type="button"
-            className={inlineActionButton}
-            onClick={onListenCoach}
-            disabled={!ttsSupported}
-            title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
-          >
-            <Volume2 size={14} />
-            직원 안내 듣기
-          </button>
-          <button
-            type="button"
-            className={inlineActionButton}
-            onClick={onReadCustomer}
-            disabled={!ttsSupported}
-            title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
-          >
-            <Volume2 size={14} />
-            고객에게 읽기
-          </button>
+      {isCompact ? (
+        <>
+          <section className={glanceCard[tone]} aria-label="지금 할 일">
+            <p className={glanceCardTitle}>지금 할 일</p>
+            <ol className={glanceSteps}>
+              {glanceItems.map((step, index) => (
+                <li key={`${index}-${step}`} className={glanceStep}>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </section>
+          <section className={compactEvidence} aria-label="근거">
+            <p className={compactEvidenceTitle}>
+              {isFixedSafety ? "안전 절차 근거" : "근거"}
+            </p>
+            {recommendation.citations.length > 0 ? (
+              <CitationList citations={recommendation.citations} collapsibleQuotes />
+            ) : (
+              <p className={noEvidence}>
+                확인된 RAG 근거 없음
+                <br />
+                일반적인 응대 원칙으로 작성됨 · 상담사 검토 필요
+              </p>
+            )}
+          </section>
+          <div className={glanceActions}>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onToggleScript}
+              disabled={editing}
+            >
+              {editing ? "전체 멘트 수정 중" : scriptOpen ? "전체 멘트 닫기" : "전체 멘트 보기"}
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onListenCoach}
+              disabled={!ttsSupported}
+              title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+            >
+              <Volume2 size={14} />
+              직원 안내 듣기
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onReadCustomer}
+              disabled={!ttsSupported}
+              title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+            >
+              <Volume2 size={14} />
+              고객에게 읽기
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className={scriptBlock}>
+          <p className={scriptLabel}>{isFixedSafety ? "안전 응대 멘트" : "고객 응대 멘트"}</p>
+          {editing ? (
+            <textarea
+              className={editArea}
+              value={editText}
+              onChange={(event) => onEditTextChange(event.target.value)}
+            />
+          ) : (
+            <p className={recommendationText}>{recommendation.sayNow}</p>
+          )}
+          <div className={glanceActions}>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onListenCoach}
+              disabled={!ttsSupported}
+            >
+              <Volume2 size={14} />
+              직원 안내 듣기
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onReadCustomer}
+              disabled={!ttsSupported}
+            >
+              <Volume2 size={14} />
+              고객에게 읽기
+            </button>
+          </div>
         </div>
-        {!ttsSupported && (
-          <p className={ttsUnsupported}>이 브라우저는 음성 읽기를 지원하지 않습니다.</p>
-        )}
-      </section>
+      )}
 
-      {scriptOpen && (
+      {!isCompact && (
+        <section className={compactEvidence} aria-label="근거">
+          <p className={compactEvidenceTitle}>
+            {isFixedSafety ? "안전 절차 근거" : "근거"}
+          </p>
+          {recommendation.citations.length > 0 ? (
+            <CitationList
+              citations={recommendation.citations}
+              note={
+                recommendation.needsHumanReview
+                  ? "상담사가 답변을 검토 중입니다."
+                  : undefined
+              }
+            />
+          ) : (
+            <p className={noEvidence}>
+              확인된 RAG 근거 없음
+              <br />
+              일반적인 응대 원칙으로 작성됨 · 상담사 검토 필요
+            </p>
+          )}
+        </section>
+      )}
+
+      {isCompact && scriptOpen && (
         <div className={scriptBlock}>
           <p className={scriptLabel}>고객 응대 전체 멘트</p>
           {editing ? (
@@ -1130,34 +1260,34 @@ function AnswerCard({
               {recommendation.nextActions.length > 0 &&
                 `다음 행동 ${recommendation.nextActions.length}`}
               {recommendation.nextActions.length > 0 &&
-                recommendation.citations.length > 0 &&
+                recommendation.doNot.length > 0 &&
                 " · "}
-              {recommendation.citations.length > 0 &&
-                `답변 근거 ${citationSummary(recommendation.citations)}`}
+              {recommendation.doNot.length > 0 && `주의 ${recommendation.doNot.length}`}
             </span>
             {detailsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
           {detailsOpen && (
             <div className={detailBody}>
               {recommendation.nextActions.length > 0 && (
-                <ul className={actionList}>
-                  {recommendation.nextActions.map((action) => (
-                    <li key={action}>{action}</li>
-                  ))}
-                </ul>
+                <div>
+                  <p className={detailLabel}>다음 행동</p>
+                  <ul className={actionList}>
+                    {recommendation.nextActions.map((action) => (
+                      <li key={action}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-              {recommendation.citations.length > 0 && (
-                <CitationList
-                  citations={recommendation.citations}
-                  note={
-                    recommendation.needsHumanReview
-                      ? "상담사가 답변을 검토 중입니다."
-                      : undefined
-                  }
-                />
+              {recommendation.doNot.length > 0 && (
+                <div>
+                  <p className={detailLabel}>하지 말 것</p>
+                  <ul className={doNotList}>
+                    {recommendation.doNot.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-              {recommendation.citations.length === 0 &&
-                recommendation.needsHumanReview && <p>상담사가 답변을 검토 중입니다.</p>}
             </div>
           )}
         </>

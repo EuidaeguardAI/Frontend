@@ -2,6 +2,8 @@ import type { Citation } from "@/lib/types";
 
 import {
   caption,
+  disclosure,
+  disclosureSummary,
   highlight,
   item,
   kindBadge,
@@ -44,9 +46,11 @@ export function citationSummary(citations: Citation[]): string {
 export function CitationList({
   citations,
   note,
+  collapsibleQuotes = false,
 }: {
   citations: Citation[];
   note?: string;
+  collapsibleQuotes?: boolean;
 }) {
   return (
     <div className={list}>
@@ -59,7 +63,15 @@ export function CitationList({
               <span className={sourceSection}>· {citation.section}</span>
             )}
           </p>
-          {citation.quote ? (
+          {citation.quote && collapsibleQuotes ? (
+            <details className={disclosure}>
+              <summary className={disclosureSummary}>근거 문장 보기</summary>
+              <p className={quoteText}>
+                <mark className={highlight}>{citation.quote}</mark>
+              </p>
+              <p className={caption}>이 문장을 근거로 위와 같이 안내했습니다.</p>
+            </details>
+          ) : citation.quote ? (
             <>
               <p className={quoteText}>
                 <mark className={highlight}>{citation.quote}</mark>

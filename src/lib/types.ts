@@ -3,6 +3,7 @@
 // 기획서 8-3절 출력 스키마(situation/risk_level/say_now/next_action/do_not/citations/confidence/needs_human_review)를 그대로 옮김.
 
 export type RiskLevel = "normal" | "dispute" | "abuse" | "threat" | "emergency";
+export type ResponseMode = "full" | "compact";
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   normal: "일반 문의",
@@ -66,6 +67,8 @@ export interface Recommendation {
    */
   expectedReplies: string[];
   createdAtMs: number;
+  /** 과거 저장 데이터에는 없을 수 있으며, 이 경우 긴 응대 모드로 표시한다. */
+  responseMode?: ResponseMode;
 }
 
 export type ProblemType =
