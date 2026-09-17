@@ -2,6 +2,7 @@ import type {
   AskAnswer,
   BusinessProfile,
   Recommendation,
+  ResponseMode,
   RiskLevel,
   SessionIntake,
   Speaker,
@@ -14,10 +15,19 @@ export interface AnalyzeRequestBody {
   recentTranscript: { speaker: Speaker; text: string }[];
   recentSituations: RiskLevel[];
   latestText: string;
+  responseMode: ResponseMode;
 }
 
+/** 새 API 응답은 실제 생성에 사용한 모드를 항상 포함한다. */
+export type RecommendationResponseBody = Omit<
+  Recommendation,
+  "responseMode"
+> & {
+  responseMode: ResponseMode;
+};
+
 export interface AnalyzeResponseBody {
-  recommendation: Recommendation;
+  recommendation: RecommendationResponseBody;
 }
 
 export interface SttResponseBody {

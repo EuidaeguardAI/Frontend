@@ -16,6 +16,107 @@ export const statusBar = style({
   flexShrink: 0,
 });
 
+export const responseModeBar = style({
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: vars.space.xs,
+  flexShrink: 0,
+  padding: "6px 8px",
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.border}`,
+  background: vars.color.surface,
+});
+
+export const responseModeLabel = style({
+  fontSize: "11px",
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const responseModeSegments = style({
+  display: "inline-flex",
+  padding: "2px",
+  borderRadius: vars.radius.pill,
+  background: vars.color.surfaceMuted,
+});
+
+const responseModeButtonBase = style({
+  padding: "4px 10px",
+  border: "none",
+  borderRadius: vars.radius.pill,
+  fontSize: "11px",
+  fontWeight: 700,
+  cursor: "pointer",
+});
+
+export const responseModeButton = styleVariants({
+  inactive: [responseModeButtonBase, { background: "transparent", color: vars.color.textMuted }],
+  active: [
+    responseModeButtonBase,
+    { background: vars.color.primary, color: vars.color.white },
+  ],
+});
+
+export const responseModeHint = style({
+  marginLeft: "auto",
+  fontSize: "11px",
+  color: vars.color.textFaint,
+  '@media': { 'screen and (max-width: 420px)': { marginLeft: 0 } },
+});
+
+export const ttsMenu = style({
+  position: "relative",
+  flexShrink: 0,
+});
+
+export const ttsMenuSummary = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "4px",
+  padding: "5px 8px",
+  border: `1px solid ${vars.color.border}`,
+  borderRadius: vars.radius.pill,
+  background: vars.color.white,
+  color: vars.color.textMuted,
+  fontSize: "11px",
+  fontWeight: 700,
+  cursor: "pointer",
+  listStyle: "none",
+  selectors: { "&::-webkit-details-marker": { display: "none" } },
+});
+
+export const ttsMenuBody = style({
+  position: "absolute",
+  zIndex: 20,
+  top: "calc(100% + 6px)",
+  right: 0,
+  width: "220px",
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.sm,
+  padding: vars.space.sm,
+  border: `1px solid ${vars.color.border}`,
+  borderRadius: vars.radius.md,
+  background: vars.color.white,
+  boxShadow: vars.shadow.raised,
+});
+
+export const ttsMenuRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space.xs,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.text,
+});
+
+export const ttsUnsupported = style({
+  fontSize: "11px",
+  color: vars.color.textMuted,
+  lineHeight: 1.4,
+});
+
 export const meter = style({
   flex: 1,
   minWidth: 0,
@@ -277,11 +378,138 @@ export const recommendationText = style({
   lineHeight: 1.5,
 });
 
+const glanceCardBase = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.sm,
+  padding: vars.space.md,
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.primary}`,
+  background: vars.color.white,
+});
+
+export const glanceCard = styleVariants({
+  primary: [glanceCardBase, { borderColor: vars.color.primary }],
+  warning: [glanceCardBase, { borderColor: vars.color.warning }],
+  danger: [glanceCardBase, { borderColor: vars.color.danger }],
+});
+
+export const glanceCardTitle = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const glanceSteps = style({
+  display: "grid",
+  gap: vars.space.xs,
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+  counterReset: "glance-step",
+});
+
+export const glanceStep = style({
+  counterIncrement: "glance-step",
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space.sm,
+  fontSize: vars.fontSize.xl,
+  fontWeight: 800,
+  lineHeight: 1.25,
+  color: vars.color.text,
+  selectors: {
+    "&::before": {
+      content: "counter(glance-step)",
+      flexShrink: 0,
+      width: "24px",
+      height: "24px",
+      display: "grid",
+      placeItems: "center",
+      borderRadius: "50%",
+      background: vars.color.surfaceMuted,
+      color: vars.color.textMuted,
+      fontSize: vars.fontSize.xs,
+    },
+  },
+});
+
+export const glanceActions = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space.xs,
+});
+
+export const compactEvidence = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.xs,
+  padding: vars.space.sm,
+  borderRadius: vars.radius.md,
+  background: vars.color.surface,
+  border: `1px solid ${vars.color.border}`,
+});
+
+export const compactEvidenceTitle = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const noEvidence = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  lineHeight: 1.6,
+});
+
+export const inlineActionButton = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "4px",
+  minHeight: "32px",
+  padding: "6px 10px",
+  border: `1px solid ${vars.color.border}`,
+  borderRadius: vars.radius.pill,
+  background: vars.color.white,
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 700,
+  cursor: "pointer",
+  selectors: {
+    "&:disabled": { opacity: 0.45, cursor: "not-allowed" },
+  },
+});
+
+export const scriptBlock = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space.xs,
+  paddingTop: vars.space.xs,
+});
+
+export const scriptLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 700,
+  color: vars.color.textMuted,
+});
+
 export const actionList = style({
   fontSize: vars.fontSize.sm,
   lineHeight: 1.7,
   paddingLeft: vars.space.md,
 });
+
+export const detailLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 800,
+  color: vars.color.textMuted,
+});
+
+export const doNotList = style([
+  actionList,
+  { color: vars.color.danger },
+]);
 
 // 다음 행동·근거는 기본으로 접어 둔다. 첫 화면에서 답변 문장과 예상 답변만 보이게 해
 // 카드 높이를 낮추는 것이 이 화면의 핵심이다.
@@ -356,7 +584,7 @@ export const editArea = style({
 
 export const actionBar = style({
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
+  gridTemplateColumns: "repeat(3, 1fr)",
   gap: vars.space.xs,
   padding: vars.space.md,
   borderTop: `1px solid ${vars.color.border}`,
