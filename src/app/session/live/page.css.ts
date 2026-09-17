@@ -354,11 +354,13 @@ export const editArea = style({
 
 /* ── 하단 액션바 ────────────────────────────────────────── */
 
+// 상시 녹음으로 바뀌면서 "다음 고객"이 더해져 5칸이 됐다. 좁은 기기에서 글자가 깨지지
+// 않도록 라벨은 xs보다 한 단계 더 줄인다(actionButton 쪽에서 처리).
 export const actionBar = style({
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
-  gap: vars.space.xs,
-  padding: vars.space.md,
+  gridTemplateColumns: "repeat(5, 1fr)",
+  gap: "4px",
+  padding: `${vars.space.sm} ${vars.space.xs}`,
   borderTop: `1px solid ${vars.color.border}`,
   background: vars.color.white,
 });
@@ -376,12 +378,97 @@ export const actionButton = style({
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
+  justifyContent: "center",
   gap: "4px",
-  padding: `${vars.space.sm} 0`,
+  padding: `${vars.space.sm} 2px`,
   borderRadius: vars.radius.md,
   border: `1px solid ${vars.color.border}`,
   background: vars.color.white,
+  fontSize: "11px",
+  lineHeight: 1.2,
+  whiteSpace: "nowrap",
+  color: vars.color.textMuted,
+  fontWeight: 600,
+  selectors: {
+    "&:disabled": { opacity: 0.4 },
+  },
+});
+
+// "다음 고객"은 상시 녹음에서 가장 자주 눌리는 버튼이라 한눈에 찾을 수 있어야 한다.
+export const primaryActionButton = style([
+  actionButton,
+  {
+    borderColor: vars.color.primary,
+    background: vars.color.primaryLight,
+    color: vars.color.primary,
+  },
+]);
+
+/* ── 대기(듣는 중) 상태 ──────────────────────────────────── */
+
+// 상담이 아직 시작되지 않았을 때. 손님이 말을 시작하면 자동으로 상담이 만들어지므로
+// 직원이 눌러야 할 것은 없고, "듣고 있다"는 사실만 분명히 보이면 된다.
+export const waitingBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  alignSelf: "center",
+  padding: "4px 12px",
+  borderRadius: vars.radius.pill,
+  background: vars.color.surfaceMuted,
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+});
+
+/* ── 스트리밍 중인 답변 ─────────────────────────────────── */
+
+// 서버에서 글자가 도착하는 대로 보여주는 미완성 답변. 완성본과 구분되게 커서를 붙인다.
+export const draftCaret = style({
+  display: "inline-block",
+  width: "2px",
+  height: "1em",
+  marginLeft: "2px",
+  verticalAlign: "text-bottom",
+  background: vars.color.primary,
+  animation: "none",
+  opacity: 0.6,
+});
+
+export const draftLabel = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
+  fontWeight: 600,
+});
+
+/* ── 긴급 버튼 / 토스트 ─────────────────────────────────── */
+
+// 상시 대기 중에도 즉시 눌러야 하는 버튼이라 live 화면 상단에 둔다.
+export const emergencyRow = style({
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "6px",
+  width: "100%",
+  padding: "8px",
+  borderRadius: vars.radius.md,
+  border: `1px solid ${vars.color.danger}`,
+  background: vars.color.dangerLight,
+  color: vars.color.danger,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+});
+
+export const toast = style({
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  padding: `6px ${vars.space.sm}`,
+  borderRadius: vars.radius.md,
+  background: vars.color.surfaceMuted,
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
   fontWeight: 600,
 });

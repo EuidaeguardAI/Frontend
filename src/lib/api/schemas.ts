@@ -1,11 +1,19 @@
 import type {
   AskAnswer,
   BusinessProfile,
+  KnowledgeCategory,
   Recommendation,
   RiskLevel,
   SessionIntake,
   Speaker,
 } from "@/lib/types";
+
+/** 분석 요청에 실어 보내는 매장 규정. 서버는 프롬프트에만 쓰고 저장하지 않는다. */
+export interface StoreKnowledgeBody {
+  category: KnowledgeCategory;
+  title: string;
+  body: string;
+}
 
 // 클라이언트(consultationClient)와 서버(API 라우트)가 함께 쓰는 요청/응답 타입.
 export interface AnalyzeRequestBody {
@@ -14,11 +22,20 @@ export interface AnalyzeRequestBody {
   recentTranscript: { speaker: Speaker; text: string }[];
   recentSituations: RiskLevel[];
   latestText: string;
+  /** 직원이 등록한 매장 규정. 없으면 생략 가능(서버 기본값 []). */
+  storeKnowledge?: StoreKnowledgeBody[];
 }
 
 export interface AnalyzeResponseBody {
   recommendation: Recommendation;
 }
+
+/** /analyze/stream 이 SSE로 흘려보내는 이벤트. */
+export type AnalyzeStreamEvent =
+  | { type: "stage"; stage: "retrieving" | "generating" }
+  | { type: "partial"; situation: RiskLevel; sayNow: string }
+  | { type: "done"; recommendation: Recommendation }
+  | { type: "error"; detail: string };
 
 export interface SttResponseBody {
   text: string;
