@@ -7,9 +7,8 @@ import { MobileFrame } from "@/components/layout/MobileFrame";
 import { BottomNav } from "@/components/ui/BottomNav";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { useIntakeDraftStore } from "@/lib/store/intakeDraftStore";
+import { useListeningStore } from "@/lib/store/listeningStore";
 import { useProfileStore } from "@/lib/store/profileStore";
-import { useSessionStore } from "@/lib/store/sessionStore";
 import { hasMicPermission, rememberMicGranted } from "@/lib/mic/micPermission";
 import {
   body,
@@ -29,24 +28,15 @@ export default function SessionPreparePage() {
   // 이전 상담에서 이미 허용받은 마이크인지 확인하는 동안에는 버튼 화면을 보여주지 않는다.
   // (허용된 적이 있으면 그대로 녹음 화면으로 넘어가 버리므로, 화면이 잠깐 떴다 사라지는 깜빡임을 막는다)
   const [checkingPermission, setCheckingPermission] = useState(true);
-  const setMicAvailable = useIntakeDraftStore((state) => state.setMicAvailable);
+  const setMicAvailable = useListeningStore((state) => state.setMicAvailable);
+  const declareEmergency = useListeningStore((state) => state.declareEmergency);
   const profile = useProfileStore((state) => state.profile);
-  const initSession = useSessionStore((state) => state.initSession);
 
-  // 마이크를 허용하고 시작하는 경로는 "빠른 상황 입력" 화면을 건너뛰고 바로 녹음 화면으로 간다.
-  // 녹화 중에는 설문에 답할 시간이 없다는 것이 전제라, 문제 유형·발생 행동·이전 조치는
-  // 기본값(빈 값)으로 채운다 — 편의점 식료품 조항 같은 백엔드 고정 인용은 온보딩의 업종
-  // 정보만으로도 그대로 동작한다.
-  const startRecordingSession = () => {
-    if (!profile) return;
-    initSession(profile, {
-      inProgress: false,
-      micAvailable: true,
-      problemTypes: [],
-      behaviorTypes: [],
-      priorAction: undefined,
-      emergencyDeclared: false,
-    });
+  // 이 화면이 하는 일은 마이크 권한을 받는 것뿐이다. 상담(세션)은 더 이상 여기서 만들지
+  // 않는다 — 상시 녹음으로 바뀌면서 "손님이 말을 시작한 순간"이 상담의 시작이 됐고,
+  // 그 판단은 live 화면이 한다.
+  const startListening = (micGranted: boolean) => {
+    setMicAvailable(micGranted);
     router.push("/session/live");
   };
 
@@ -56,7 +46,7 @@ export default function SessionPreparePage() {
       const granted = await hasMicPermission();
       if (cancelled) return;
       if (granted && profile) {
-        startRecordingSession();
+        startListening(true);
         return;
       }
       setCheckingPermission(false);
@@ -72,32 +62,22 @@ export default function SessionPreparePage() {
       const stream = await navigator.mediaDevices?.getUserMedia({ audio: true });
       stream?.getTracks().forEach((track) => track.stop());
     } catch {
-      // 권한 거부·장치 없음: 녹음 없이 빠른 상황 입력 화면으로 보낸다(기존 수동 입력 경로).
-      setMicAvailable(false);
-      router.push("/session/intake");
+      // 권한 거부·장치 없음: 녹음 없이 live 화면의 직접 입력 모드로 보낸다.
+      startListening(false);
       return;
     }
     rememberMicGranted();
-    startRecordingSession();
+    startListening(true);
   };
 
-  const skipMic = () => {
-    setMicAvailable(false);
-    router.push("/session/intake");
-  };
+  const skipMic = () => startListening(false);
 
-  // 마이크 허용 여부와 무관하게 즉시 고정 안전 절차로 들어간다 — 빠른 상황 입력 화면을
-  // 거치지 않게 되면서 그 화면에 있던 "지금 긴급해요" 버튼도 여기로 옮겨 왔다.
+  // 마이크 허용 여부와 무관하게 즉시 고정 안전 절차로 들어간다.
+  // live 화면이 마운트되면서 이 플래그를 소비해 안전 절차를 띄운다.
   const startEmergency = () => {
     if (!profile) return;
-    initSession(profile, {
-      inProgress: false,
-      micAvailable: false,
-      problemTypes: [],
-      behaviorTypes: [],
-      priorAction: undefined,
-      emergencyDeclared: true,
-    });
+    declareEmergency();
+    setMicAvailable(false);
     router.push("/session/live");
   };
 

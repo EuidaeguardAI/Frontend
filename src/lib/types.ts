@@ -117,6 +117,38 @@ export interface BusinessProfile {
   onboardedAtMs: number;
 }
 
+export type KnowledgeCategory =
+  | "refund_policy"
+  | "product"
+  | "frequent_claim"
+  | "etc";
+
+export const KNOWLEDGE_CATEGORY_LABEL: Record<KnowledgeCategory, string> = {
+  refund_policy: "환불·교환 기준",
+  product: "취급 상품",
+  frequent_claim: "자주 오는 클레임",
+  etc: "기타",
+};
+
+/**
+ * 직원이 직접 등록한 우리 매장 규정. 공식 고시·법령을 색인한 지식베이스(RAG)와 달리
+ * 이 기기의 localStorage에만 저장되고, 분석 요청마다 프롬프트에 실려 서버로 간다.
+ * 서버는 이것을 저장하지 않는다.
+ *
+ * 법령이 아니므로 답변의 citations(근거)로는 쓰지 않는다 — 공식 근거와 섞이면
+ * "법이 그렇다"로 읽힌다. 프롬프트에서 "매장 기준"으로 구분해 쓰게 한다.
+ */
+export interface StoreKnowledgeEntry {
+  id: string;
+  category: KnowledgeCategory;
+  title: string;
+  body: string;
+  /** 끄면 분석에 보내지 않는다. 지우지 않고 잠시 빼 둘 때 쓴다. */
+  enabled: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface SessionIntake {
   inProgress: boolean;
   micAvailable: boolean;

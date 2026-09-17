@@ -46,6 +46,17 @@ export interface VoiceActivityMonitor {
   beginWindow: () => void;
   /** 청크 녹음이 끝난 시점에 호출 — 그 사이 측정 결과를 돌려준다. */
   endWindow: () => VoiceWindowResult;
+  /**
+   * 이번 window에서 지금까지 말소리로 친 누적 시간(ms). endWindow 전에도 읽을 수 있다.
+   * 녹음 도중 "말이 시작되긴 했는지"를 판단하는 데 쓴다.
+   */
+  voicedMsSoFar: () => number;
+  /**
+   * 마지막으로 말소리가 감지된 뒤 흐른 시간(ms). 말하는 중이면 0.
+   * 아직 이번 window에서 한 번도 말소리가 없었으면 Infinity.
+   * "손님이 말을 마쳤다"를 판정하는 기준이다.
+   */
+  trailingSilenceMs: () => number;
   close: () => void;
 }
 
@@ -83,6 +94,10 @@ export function createVoiceActivityMonitor(stream: MediaStream): VoiceActivityMo
       isVoiced: () => true,
       beginWindow: () => {},
       endWindow: () => ({ voicedMs: Infinity, peakDb: 0, thresholdDb: ABSOLUTE_FLOOR_DB }),
+      // 말 끝을 잴 수단이 없으므로 "계속 말하는 중"으로 본다 — 그러면 녹음 루프가
+      // 발화 끝 감지로 끊지 못하고 최대 길이까지 채우게 되어, 예전의 고정 청크와 같이 동작한다.
+      voicedMsSoFar: () => Infinity,
+      trailingSilenceMs: () => 0,
       close: () => {},
     };
   }
@@ -103,6 +118,9 @@ export function createVoiceActivityMonitor(stream: MediaStream): VoiceActivityMo
   let currentDb = -100;
   let voicedMs = 0;
   let peakDb = -100;
+  // 이번 window에서 마지막 말소리 프레임 이후 흐른 시간. 아직 말소리가 없었으면 null.
+  // "말을 마쳤는지"는 이 값으로 판정한다 — 캘리브레이션 전에는 재지 않는다.
+  let silenceMs: number | null = null;
 
   const thresholdDb = () => Math.max(noiseFloorDb + MARGIN_DB, ABSOLUTE_FLOOR_DB + MARGIN_DB);
 
@@ -131,6 +149,9 @@ export function createVoiceActivityMonitor(stream: MediaStream): VoiceActivityMo
     if (db > thresholdDb()) {
       voicedMs += FRAME_MS;
       if (db > peakDb) peakDb = db;
+      silenceMs = 0;
+    } else if (silenceMs !== null) {
+      silenceMs += FRAME_MS;
     }
   };
 
@@ -142,8 +163,11 @@ export function createVoiceActivityMonitor(stream: MediaStream): VoiceActivityMo
     beginWindow: () => {
       voicedMs = 0;
       peakDb = -100;
+      silenceMs = null;
     },
     endWindow: () => ({ voicedMs, peakDb, thresholdDb: thresholdDb() }),
+    voicedMsSoFar: () => voicedMs,
+    trailingSilenceMs: () => (silenceMs === null ? Infinity : silenceMs),
     close: () => {
       window.clearInterval(timer);
       try {
