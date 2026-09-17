@@ -36,6 +36,11 @@ export interface TranscriptSegment {
   speaker: Speaker;
   text: string;
   confidence?: number;
+  /**
+   * 말소리가 아주 짧거나 인식 결과가 짧아 "잘못 들었을 수 있는" 구간.
+   * 분석은 그대로 진행하되 대화 창에 흐리게 표시해, 직원이 보고 지울 수 있게 한다.
+   */
+  lowConfidence?: boolean;
   timestampMs: number;
 }
 

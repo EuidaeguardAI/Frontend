@@ -22,6 +22,8 @@ export interface AnalyzeResponseBody {
 
 export interface SttResponseBody {
   text: string;
+  /** 서버가 무음 구간의 환각 문구로 보고 걸러냈으면 true (text는 빈 문자열). */
+  filtered?: boolean;
 }
 
 export interface ReportRequestBody {

@@ -13,6 +13,8 @@ interface SessionState {
   muted: boolean;
   initSession: (profile: BusinessProfile, intake: SessionIntake) => ConsultationSession;
   appendTranscript: (segment: TranscriptSegment) => void;
+  /** 잘못 인식된 발화와, 그 발화 때문에 만들어진 추천 답변을 함께 지운다. */
+  removeTurn: (segmentIds: string[], recommendationId?: string) => void;
   addRecommendation: (recommendation: Recommendation) => void;
   addAction: (action: string) => void;
   toggleMute: () => void;
@@ -54,6 +56,23 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         session: {
           ...state.session,
           transcript: [...state.session.transcript, segment],
+        },
+      };
+    }),
+
+  removeTurn: (segmentIds, recommendationId) =>
+    set((state) => {
+      if (!state.session) return state;
+      const removed = new Set(segmentIds);
+      return {
+        session: {
+          ...state.session,
+          transcript: state.session.transcript.filter((segment) => !removed.has(segment.id)),
+          recommendations: recommendationId
+            ? state.session.recommendations.filter(
+                (recommendation) => recommendation.id !== recommendationId,
+              )
+            : state.session.recommendations,
         },
       };
     }),
