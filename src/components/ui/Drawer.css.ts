@@ -20,7 +20,6 @@ export const backdrop = style({
 export const panel = style({
   position: "absolute",
   top: 0,
-  right: 0,
   height: "100%",
   width: "82%",
   maxWidth: "320px",
@@ -28,7 +27,6 @@ export const panel = style({
   boxShadow: vars.shadow.raised,
   display: "flex",
   flexDirection: "column",
-  transform: "translateX(100%)",
   transition: "transform 0.25s ease",
   zIndex: 41,
   selectors: {
@@ -36,6 +34,17 @@ export const panel = style({
       transform: "translateX(0)",
     },
   },
+});
+
+// 여는 방향만 다르고 나머지는 같아서, 닫힌 상태의 위치만 갈라 둔다.
+export const panelRight = style({
+  right: 0,
+  transform: "translateX(100%)",
+});
+
+export const panelLeft = style({
+  left: 0,
+  transform: "translateX(-100%)",
 });
 
 export const header = style({
