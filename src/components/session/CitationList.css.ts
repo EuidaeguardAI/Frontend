@@ -47,6 +47,19 @@ export const sourceSection = style({
   color: vars.color.textMuted,
 });
 
+export const disclosure = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
+});
+
+export const disclosureSummary = style({
+  cursor: "pointer",
+  fontSize: "11px",
+  fontWeight: 700,
+  color: vars.color.primary,
+});
+
 export const quoteText = style({
   fontSize: vars.fontSize.sm,
   lineHeight: 1.7,

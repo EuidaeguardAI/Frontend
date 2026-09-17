@@ -1,6 +1,14 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowDown,
@@ -13,6 +21,7 @@ import {
   Pencil,
   PhoneOff,
   Send,
+  Settings2,
   ShieldAlert,
   Siren,
   Sparkles,
@@ -24,7 +33,6 @@ import {
 import { MobileFrame } from "@/components/layout/MobileFrame";
 import {
   CitationList,
-  citationSummary,
 } from "@/components/session/CitationList";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
@@ -40,10 +48,13 @@ import {
   selectKnowledgeForAnalysis,
   useStoreKnowledgeStore,
 } from "@/lib/store/storeKnowledgeStore";
+import { useResponseModeStore } from "@/lib/store/responseModeStore";
+import { useTtsSettingsStore, type TtsMode } from "@/lib/store/ttsSettingsStore";
 import {
   RISK_LABEL,
   type ConsultationSession,
   type Recommendation,
+  type ResponseMode,
   type RiskLevel,
   type TranscriptSegment,
   type TranscriptSource,
@@ -72,27 +83,50 @@ import {
   deleteButton,
   deleteRow,
   detailBody,
+  detailLabel,
   detailToggle,
+  compactEvidence,
+  compactEvidenceTitle,
   disclaimer,
   draftCaret,
   draftLabel,
+  doNotList,
   echoCheck,
   echoTag,
   editArea,
   emergencyRow,
   meter,
   meterBar,
+  noEvidence,
   paneDivider,
   paneHandle,
   paneHandleLabel,
   primaryActionButton,
+  glanceActions,
+  glanceCard,
+  glanceCardTitle,
+  glanceStep,
+  glanceSteps,
+  inlineActionButton,
+  scriptBlock,
+  scriptLabel,
   quickReplyLabel,
   quickReplyRow,
   recommendationText,
+  responseModeBar,
+  responseModeButton,
+  responseModeHint,
+  responseModeLabel,
+  responseModeSegments,
   sourceTag,
   speakerIcon,
   statusBar,
   toast as toastStyle,
+  ttsMenu,
+  ttsMenuBody,
+  ttsMenuRow,
+  ttsMenuSummary,
+  ttsUnsupported,
   topRow,
   transcriptEmpty,
   transcriptPane,
@@ -124,6 +158,12 @@ const IDLE_CHECK_MS = 10_000;
 // 토스트를 띄워 두는 시간.
 const TOAST_MS = 4000;
 
+const subscribeToTtsSupport = () => () => undefined;
+const getTtsSupportSnapshot = () =>
+  typeof window !== "undefined" &&
+  "speechSynthesis" in window &&
+  "SpeechSynthesisUtterance" in window;
+
 type PaneSize = "sm" | "md" | "lg";
 const PANE_SIZE_ORDER: PaneSize[] = ["sm", "md", "lg"];
 const PANE_SIZE_LABEL: Record<PaneSize, string> = {
@@ -151,10 +191,19 @@ export default function SessionLivePage() {
   const micAvailable = useListeningStore((state) => state.micAvailable);
   const toggleMute = useListeningStore((state) => state.toggleMute);
   const profile = useProfileStore((state) => state.profile);
+  const responseMode = useResponseModeStore((state) => state.responseMode);
+  const setResponseMode = useResponseModeStore((state) => state.setResponseMode);
+  const ttsEnabled = useTtsSettingsStore((state) => state.ttsEnabled);
+  const ttsMode = useTtsSettingsStore((state) => state.ttsMode);
+  const ttsAutoPlay = useTtsSettingsStore((state) => state.ttsAutoPlay);
+  const setTtsEnabled = useTtsSettingsStore((state) => state.setTtsEnabled);
+  const setTtsMode = useTtsSettingsStore((state) => state.setTtsMode);
+  const setTtsAutoPlay = useTtsSettingsStore((state) => state.setTtsAutoPlay);
 
   // 아래 세 가지는 "어느 답변에 대한 상태인지"를 함께 들고 있는다. 새 답변이 오면
   // 그 id가 더 이상 맞지 않게 되어 자동으로 초기 상태로 돌아간다(effect에서 초기화하지 않는다).
   const [detailsOpenFor, setDetailsOpenFor] = useState<string | null>(null);
+  const [scriptOpenFor, setScriptOpenFor] = useState<string | null>(null);
   const [editingFor, setEditingFor] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [warningSent, setWarningSent] = useState(false);
@@ -170,6 +219,11 @@ export default function SessionLivePage() {
   // 지금 말소리가 들어오고 있는지(상태 문구용). 레벨 미터는 리렌더 없이 따로 그린다.
   const [hearing, setHearing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const ttsSupported = useSyncExternalStore(
+    subscribeToTtsSupport,
+    getTtsSupportSnapshot,
+    () => false,
+  );
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const answerRef = useRef<HTMLDivElement>(null);
@@ -197,6 +251,8 @@ export default function SessionLivePage() {
   }, []);
 
   useEffect(() => () => window.clearTimeout(toastTimerRef.current), []);
+  // 설정 변경이나 리렌더가 같은 추천을 다시 읽게 하지 않도록, 도착 자체를 한 번만 관찰한다.
+  const lastObservedTtsRecommendationRef = useRef<string | null>(null);
 
   const markAnalyzing = useCallback((value: boolean) => {
     analyzingRef.current = value;
@@ -282,6 +338,37 @@ export default function SessionLivePage() {
           return;
         }
 
+    if (!current) return;
+    const seq = analysisSeqRef.current + 1;
+    analysisSeqRef.current = seq;
+    setAnalyzing(true);
+    try {
+      const recommendation = await consultationClient.analyze({
+        profile: current.profile,
+        intake: current.intake,
+        recentTranscript: current.transcript
+          .slice(-8)
+          .map((segment) => ({ speaker: segment.speaker, text: segment.text })),
+        recentSituations: current.recommendations
+          .slice(-4)
+          .map((recommendation) => recommendation.situation),
+        latestText,
+        // 녹음 effect의 오래된 클로저가 아니라 요청 직전 persist store의 최신값을 읽는다.
+        responseMode: useResponseModeStore.getState().responseMode,
+      });
+      // 이 요청이 도는 사이 더 최신 발화에 대한 분석이 시작됐다면 이 결과는 버린다.
+      if (seq !== analysisSeqRef.current) return;
+      // 손님 발화는 새로 들어왔지만 결과 답변이 직전 답변과 사실상 같은 형태라면
+      // 카드를 또 쌓지 않는다 — 상담원 입장에서는 같은 답변이 반복 노출될 뿐이다.
+      const store = useSessionStore.getState().session;
+      const prevRecommendation = store?.recommendations[store.recommendations.length - 1];
+      const isDuplicate =
+        prevRecommendation != null &&
+        (prevRecommendation.responseMode ?? "full") === recommendation.responseMode &&
+        prevRecommendation.situation === recommendation.situation &&
+        textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
+          DUPLICATE_SIMILARITY_THRESHOLD;
+      if (!isDuplicate) {
         // 백엔드는 createdAtMs를 절대 시각(epoch ms)으로 채워 보내지만, 화면과 이력은
         // "상담 시작 후 몇 초"라는 상대 시각을 쓴다(transcript.timestampMs와 같은 축).
         // 그대로 두면 추천이 항상 모든 발화보다 뒤로 정렬돼 손님 말과 짝이 지어지지 않고,
@@ -377,6 +464,23 @@ export default function SessionLivePage() {
     if (!useListeningStore.getState().consumeEmergency()) return;
     const current = ensureSession();
     if (current) pushFixedSafety("", current);
+    if (!session) return;
+    const current = useSessionStore.getState().session;
+    if (
+      session.intake.emergencyDeclared &&
+      current &&
+      current.recommendations.length === 0
+    ) {
+      addRecommendation({
+        ...buildFixedSafetyRecommendation(
+          "",
+          useResponseModeStore.getState().responseMode,
+        ),
+        id: `rec-${Date.now()}`,
+        createdAtMs: Date.now() - session.startedAtMs,
+      });
+      stoppedRef.current = true;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -465,6 +569,41 @@ export default function SessionLivePage() {
 
   const recommendations = useMemo(() => session?.recommendations ?? [], [session]);
   const latest = recommendations[recommendations.length - 1];
+
+  const speak = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(trimmed);
+    utterance.lang = "ko-KR";
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // 자동 재생은 새 추천이 도착한 순간 한 번만 실행한다. 고정 안전 절차는 항상 수동 재생만 허용한다.
+  useEffect(() => {
+    if (!latest || lastObservedTtsRecommendationRef.current === latest.id) return;
+    lastObservedTtsRecommendationRef.current = latest.id;
+    const suppressAutoPlay =
+      latest.isFixedSafetyScript ||
+      latest.situation === "threat" ||
+      latest.situation === "emergency";
+    if (suppressAutoPlay) {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      return;
+    }
+    if (!ttsSupported || !ttsEnabled || !ttsAutoPlay) return;
+    speak(ttsMode === "coach" ? latest.ttsText?.trim() || latest.sayNow : latest.sayNow);
+  }, [latest, speak, ttsAutoPlay, ttsEnabled, ttsMode, ttsSupported]);
 
   // 보고 있는 답변이 바뀌면 답변 패널은 맨 위부터 보여준다.
   useEffect(() => {
@@ -578,15 +717,6 @@ export default function SessionLivePage() {
   // 늘 false이고, 하필 스트리밍이 가장 필요한 순간에 초안이 통째로 안 뜬다.
   const showDraft = draft != null && pinnedRecommendation == null;
 
-  const speak = (text: string) => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "ko-KR";
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
   const handleEditToggle = () => {
     if (!latest) return;
     if (editing) {
@@ -599,10 +729,16 @@ export default function SessionLivePage() {
     setEditingFor(latest.id);
   };
 
-  const handleSpeakClick = () => {
+  const handleCustomerSpeakClick = () => {
     if (!shown) return;
     speak(editing && isShowingLatest ? editText : shown.sayNow);
-    addAction("음성으로 답변");
+    addAction("고객에게 읽기");
+  };
+
+  const handleCoachSpeakClick = () => {
+    if (!shown) return;
+    speak(shown.ttsText?.trim() || shown.sayNow);
+    addAction("직원 안내 듣기");
   };
 
   const handleMuteClick = () => {
@@ -611,6 +747,10 @@ export default function SessionLivePage() {
   };
 
   const handleEnd = () => {
+    stoppedRef.current = true;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     const completed = completeSession();
     archive(completed);
     router.push("/session/complete");
@@ -830,6 +970,42 @@ export default function SessionLivePage() {
       <div className={statusBar}>
         <StatusPill>{statusText}</StatusPill>
         {!showManualInput && <LevelMeter getLevel={getLevel} muted={muted} />}
+        <details className={ttsMenu}>
+          <summary className={ttsMenuSummary} title="음성 안내 설정">
+            <Settings2 size={14} />
+            TTS · {ttsMode === "coach" ? "직원" : "고객"}
+          </summary>
+          <div className={ttsMenuBody}>
+            <label className={ttsMenuRow}>
+              <input
+                type="checkbox"
+                checked={ttsEnabled}
+                onChange={(event) => setTtsEnabled(event.target.checked)}
+              />
+              TTS 사용
+            </label>
+            <label className={ttsMenuRow}>
+              자동 재생 모드
+              <select
+                value={ttsMode}
+                onChange={(event) => setTtsMode(event.target.value as TtsMode)}
+              >
+                <option value="coach">직원 안내</option>
+                <option value="customer">고객 응대</option>
+              </select>
+            </label>
+            <label className={ttsMenuRow}>
+              <input
+                type="checkbox"
+                checked={ttsAutoPlay}
+                disabled={!ttsEnabled}
+                onChange={(event) => setTtsAutoPlay(event.target.checked)}
+              />
+              새 추천 자동 재생
+            </label>
+            {!ttsSupported && <span className={ttsUnsupported}>이 브라우저는 TTS를 지원하지 않습니다.</span>}
+          </div>
+        </details>
         {shown && (
           <Badge tone={riskTone}>
             위험도 {shown.riskLevel} · {RISK_LABEL[shown.situation]}
@@ -850,6 +1026,10 @@ export default function SessionLivePage() {
           지금 긴급해요 — 안전 절차 바로 보기
         </button>
       )}
+      <ResponseModeSelector
+        value={responseMode}
+        onChange={setResponseMode}
+      />
 
       {micError && (
         <Card tone="warning">
@@ -980,11 +1160,18 @@ export default function SessionLivePage() {
               editText={editText}
               onEditTextChange={setEditText}
               detailsOpen={detailsOpen}
+              scriptOpen={editing || scriptOpenFor === shown.id}
+              onToggleScript={() =>
+                setScriptOpenFor((id) => (id === shown.id ? null : shown.id))
+              }
               onToggleDetails={() =>
                 setDetailsOpenFor((id) => (id === shown.id ? null : shown.id))
               }
               onQuickReply={handleQuickReply}
               quickReplyDisabled={analyzing}
+              ttsSupported={ttsSupported}
+              onListenCoach={handleCoachSpeakClick}
+              onReadCustomer={handleCustomerSpeakClick}
             />
           </>
         ) : analyzing ? (
@@ -1006,6 +1193,38 @@ export default function SessionLivePage() {
         )}
       </div>
     </MobileFrame>
+  );
+}
+
+function ResponseModeSelector({
+  value,
+  onChange,
+}: {
+  value: ResponseMode;
+  onChange: (mode: ResponseMode) => void;
+}) {
+  return (
+    <div className={responseModeBar}>
+      <span className={responseModeLabel}>응답 방식</span>
+      <div className={responseModeSegments} role="radiogroup" aria-label="응답 방식">
+        {([
+          ["full", "긴 응대"],
+          ["compact", "짧은 안내"],
+        ] as const).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={value === mode}
+            className={responseModeButton[value === mode ? "active" : "inactive"]}
+            onClick={() => onChange(mode)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className={responseModeHint}>다음 추천부터 적용</span>
+    </div>
   );
 }
 
@@ -1077,9 +1296,14 @@ function AnswerCard({
   editText,
   onEditTextChange,
   detailsOpen,
+  scriptOpen,
+  onToggleScript,
   onToggleDetails,
   onQuickReply,
   quickReplyDisabled,
+  ttsSupported,
+  onListenCoach,
+  onReadCustomer,
 }: {
   recommendation: Recommendation;
   isLatest: boolean;
@@ -1088,15 +1312,27 @@ function AnswerCard({
   editText: string;
   onEditTextChange: (value: string) => void;
   detailsOpen: boolean;
+  scriptOpen: boolean;
+  onToggleScript: () => void;
   onToggleDetails: () => void;
   onQuickReply: (text: string) => void;
   quickReplyDisabled: boolean;
+  ttsSupported: boolean;
+  onListenCoach: () => void;
+  onReadCustomer: () => void;
 }) {
   const isFixedSafety = recommendation.isFixedSafetyScript;
   const isThreatAlert = recommendation.situation === "threat" && !isFixedSafety;
+  const responseMode = recommendation.responseMode ?? "full";
+  const isCompact = responseMode === "compact";
   const tone = isFixedSafety ? "danger" : isThreatAlert ? "warning" : "primary";
   const hasDetails =
-    recommendation.nextActions.length > 0 || recommendation.citations.length > 0;
+    recommendation.nextActions.length > 0 || recommendation.doNot.length > 0;
+  const glanceItems = (recommendation.glanceSummary?.trim() || recommendation.sayNow)
+    .split("→")
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, 3);
 
   return (
     <div className={answerCard[tone]}>
@@ -1107,14 +1343,135 @@ function AnswerCard({
         {!isLatest && <span className={sourceTag}>이전 답변</span>}
       </div>
 
-      {editing ? (
-        <textarea
-          className={editArea}
-          value={editText}
-          onChange={(event) => onEditTextChange(event.target.value)}
-        />
+      {isCompact ? (
+        <>
+          <section className={glanceCard[tone]} aria-label="지금 할 일">
+            <p className={glanceCardTitle}>지금 할 일</p>
+            <ol className={glanceSteps}>
+              {glanceItems.map((step, index) => (
+                <li key={`${index}-${step}`} className={glanceStep}>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </section>
+          <section className={compactEvidence} aria-label="근거">
+            <p className={compactEvidenceTitle}>
+              {isFixedSafety ? "안전 절차 근거" : "근거"}
+            </p>
+            {recommendation.citations.length > 0 ? (
+              <CitationList citations={recommendation.citations} collapsibleQuotes />
+            ) : (
+              <p className={noEvidence}>
+                확인된 RAG 근거 없음
+                <br />
+                일반적인 응대 원칙으로 작성됨 · 상담사 검토 필요
+              </p>
+            )}
+          </section>
+          <div className={glanceActions}>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onToggleScript}
+              disabled={editing}
+            >
+              {editing ? "전체 멘트 수정 중" : scriptOpen ? "전체 멘트 닫기" : "전체 멘트 보기"}
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onListenCoach}
+              disabled={!ttsSupported}
+              title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+            >
+              <Volume2 size={14} />
+              직원 안내 듣기
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onReadCustomer}
+              disabled={!ttsSupported}
+              title={ttsSupported ? undefined : "이 브라우저는 음성 읽기를 지원하지 않습니다."}
+            >
+              <Volume2 size={14} />
+              고객에게 읽기
+            </button>
+          </div>
+        </>
       ) : (
-        <p className={recommendationText}>{recommendation.sayNow}</p>
+        <div className={scriptBlock}>
+          <p className={scriptLabel}>{isFixedSafety ? "안전 응대 멘트" : "고객 응대 멘트"}</p>
+          {editing ? (
+            <textarea
+              className={editArea}
+              value={editText}
+              onChange={(event) => onEditTextChange(event.target.value)}
+            />
+          ) : (
+            <p className={recommendationText}>{recommendation.sayNow}</p>
+          )}
+          <div className={glanceActions}>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onListenCoach}
+              disabled={!ttsSupported}
+            >
+              <Volume2 size={14} />
+              직원 안내 듣기
+            </button>
+            <button
+              type="button"
+              className={inlineActionButton}
+              onClick={onReadCustomer}
+              disabled={!ttsSupported}
+            >
+              <Volume2 size={14} />
+              고객에게 읽기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isCompact && (
+        <section className={compactEvidence} aria-label="근거">
+          <p className={compactEvidenceTitle}>
+            {isFixedSafety ? "안전 절차 근거" : "근거"}
+          </p>
+          {recommendation.citations.length > 0 ? (
+            <CitationList
+              citations={recommendation.citations}
+              note={
+                recommendation.needsHumanReview
+                  ? "상담사가 답변을 검토 중입니다."
+                  : undefined
+              }
+            />
+          ) : (
+            <p className={noEvidence}>
+              확인된 RAG 근거 없음
+              <br />
+              일반적인 응대 원칙으로 작성됨 · 상담사 검토 필요
+            </p>
+          )}
+        </section>
+      )}
+
+      {isCompact && scriptOpen && (
+        <div className={scriptBlock}>
+          <p className={scriptLabel}>고객 응대 전체 멘트</p>
+          {editing ? (
+            <textarea
+              className={editArea}
+              value={editText}
+              onChange={(event) => onEditTextChange(event.target.value)}
+            />
+          ) : (
+            <p className={recommendationText}>{recommendation.sayNow}</p>
+          )}
+        </div>
       )}
 
       {isThreatAlert && <p className={disclaimer}>※ 법률상 확정 판단이 아닌 운영 안내</p>}
@@ -1150,34 +1507,34 @@ function AnswerCard({
               {recommendation.nextActions.length > 0 &&
                 `다음 행동 ${recommendation.nextActions.length}`}
               {recommendation.nextActions.length > 0 &&
-                recommendation.citations.length > 0 &&
+                recommendation.doNot.length > 0 &&
                 " · "}
-              {recommendation.citations.length > 0 &&
-                `답변 근거 ${citationSummary(recommendation.citations)}`}
+              {recommendation.doNot.length > 0 && `주의 ${recommendation.doNot.length}`}
             </span>
             {detailsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
           {detailsOpen && (
             <div className={detailBody}>
               {recommendation.nextActions.length > 0 && (
-                <ul className={actionList}>
-                  {recommendation.nextActions.map((action) => (
-                    <li key={action}>{action}</li>
-                  ))}
-                </ul>
+                <div>
+                  <p className={detailLabel}>다음 행동</p>
+                  <ul className={actionList}>
+                    {recommendation.nextActions.map((action) => (
+                      <li key={action}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-              {recommendation.citations.length > 0 && (
-                <CitationList
-                  citations={recommendation.citations}
-                  note={
-                    recommendation.needsHumanReview
-                      ? "상담사가 답변을 검토 중입니다."
-                      : undefined
-                  }
-                />
+              {recommendation.doNot.length > 0 && (
+                <div>
+                  <p className={detailLabel}>하지 말 것</p>
+                  <ul className={doNotList}>
+                    {recommendation.doNot.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
-              {recommendation.citations.length === 0 &&
-                recommendation.needsHumanReview && <p>상담사가 답변을 검토 중입니다.</p>}
             </div>
           )}
         </>

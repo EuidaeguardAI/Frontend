@@ -1,4 +1,4 @@
-import type { Recommendation, RiskLevel } from "@/lib/types";
+import type { Recommendation, ResponseMode, RiskLevel } from "@/lib/types";
 import {
   THREAT,
   WEAPON,
@@ -52,6 +52,7 @@ export function describeDetectedRisk(text: string): string {
 /** 고정 안전 절차. 흉기·강한 위협이 감지되면 112 신고를 첫 조치로 올린다. */
 export function buildFixedSafetyRecommendation(
   latestText = "",
+  responseMode: ResponseMode = "full",
 ): Omit<Recommendation, "id" | "createdAtMs"> {
   const weaponDetected = containsWeaponKeyword(latestText);
   const severe = weaponDetected || matchSevereProfanity(latestText).length > 0;
@@ -63,11 +64,20 @@ export function buildFixedSafetyRecommendation(
   const doNot = ["논쟁하지 않기", "혼자 제지하려 하지 않기"];
   if (severe) doNot.push("등을 보이거나 좁은 공간으로 이동하지 않기");
 
+  const compactFields =
+    responseMode === "compact"
+      ? {
+          glanceSummary: "거리 확보 → 관리자 호출 → 필요 시 신고",
+          ttsText: "고객과 거리를 확보하고 관리자 또는 경찰의 도움을 요청하세요.",
+        }
+      : {};
+
   return {
     situation: "emergency",
     riskLevel: 5,
     confidence: 0.95,
     sayNow: "지금은 대응하지 않고 거리를 확보하겠습니다.",
+    ...compactFields,
     nextActions,
     doNot,
     citations: [
@@ -76,5 +86,6 @@ export function buildFixedSafetyRecommendation(
     needsHumanReview: true,
     isFixedSafetyScript: true,
     expectedReplies: [],
+    responseMode,
   };
 }
