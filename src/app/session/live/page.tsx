@@ -297,6 +297,7 @@ export default function SessionLivePage() {
       const stillCurrent = () =>
         seq === analysisSeqRef.current &&
         useSessionStore.getState().session?.id === sessionId;
+      const requestedResponseMode = useResponseModeStore.getState().responseMode;
 
       markAnalyzing(true);
       try {
@@ -312,6 +313,7 @@ export default function SessionLivePage() {
               .map((recommendation) => recommendation.situation),
             latestText,
             storeKnowledge: pickStoreKnowledge(),
+            responseMode: requestedResponseMode,
           },
           {
             // 서버에서 글자가 도착하는 대로 보여준다. 전체 JSON(근거·다음 행동까지)이
@@ -328,8 +330,11 @@ export default function SessionLivePage() {
         // 카드를 또 쌓지 않는다 — 상담원 입장에서는 같은 답변이 반복 노출될 뿐이다.
         const store = useSessionStore.getState().session;
         const prevRecommendation = store?.recommendations[store.recommendations.length - 1];
+        const recommendationResponseMode =
+          recommendation.responseMode ?? requestedResponseMode;
         const isDuplicate =
           prevRecommendation != null &&
+          (prevRecommendation.responseMode ?? "full") === recommendationResponseMode &&
           prevRecommendation.situation === recommendation.situation &&
           textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
             DUPLICATE_SIMILARITY_THRESHOLD;
@@ -338,43 +343,13 @@ export default function SessionLivePage() {
           return;
         }
 
-    if (!current) return;
-    const seq = analysisSeqRef.current + 1;
-    analysisSeqRef.current = seq;
-    setAnalyzing(true);
-    try {
-      const recommendation = await consultationClient.analyze({
-        profile: current.profile,
-        intake: current.intake,
-        recentTranscript: current.transcript
-          .slice(-8)
-          .map((segment) => ({ speaker: segment.speaker, text: segment.text })),
-        recentSituations: current.recommendations
-          .slice(-4)
-          .map((recommendation) => recommendation.situation),
-        latestText,
-        // 녹음 effect의 오래된 클로저가 아니라 요청 직전 persist store의 최신값을 읽는다.
-        responseMode: useResponseModeStore.getState().responseMode,
-      });
-      // 이 요청이 도는 사이 더 최신 발화에 대한 분석이 시작됐다면 이 결과는 버린다.
-      if (seq !== analysisSeqRef.current) return;
-      // 손님 발화는 새로 들어왔지만 결과 답변이 직전 답변과 사실상 같은 형태라면
-      // 카드를 또 쌓지 않는다 — 상담원 입장에서는 같은 답변이 반복 노출될 뿐이다.
-      const store = useSessionStore.getState().session;
-      const prevRecommendation = store?.recommendations[store.recommendations.length - 1];
-      const isDuplicate =
-        prevRecommendation != null &&
-        (prevRecommendation.responseMode ?? "full") === recommendation.responseMode &&
-        prevRecommendation.situation === recommendation.situation &&
-        textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
-          DUPLICATE_SIMILARITY_THRESHOLD;
-      if (!isDuplicate) {
         // 백엔드는 createdAtMs를 절대 시각(epoch ms)으로 채워 보내지만, 화면과 이력은
         // "상담 시작 후 몇 초"라는 상대 시각을 쓴다(transcript.timestampMs와 같은 축).
         // 그대로 두면 추천이 항상 모든 발화보다 뒤로 정렬돼 손님 말과 짝이 지어지지 않고,
         // 이력 화면의 경과 시간도 엉뚱하게 찍힌다.
         addRecommendation({
           ...recommendation,
+          responseMode: recommendationResponseMode,
           createdAtMs: Date.now() - current.startedAtMs,
         });
         if (recommendation.isFixedSafetyScript) safetyLockRef.current = true;
@@ -392,7 +367,10 @@ export default function SessionLivePage() {
   const pushFixedSafety = useCallback(
     (latestText: string, target: ConsultationSession) => {
       addRecommendation({
-        ...buildFixedSafetyRecommendation(latestText),
+        ...buildFixedSafetyRecommendation(
+          latestText,
+          useResponseModeStore.getState().responseMode,
+        ),
         id: `rec-${Date.now()}`,
         createdAtMs: Date.now() - target.startedAtMs,
       });
@@ -464,23 +442,6 @@ export default function SessionLivePage() {
     if (!useListeningStore.getState().consumeEmergency()) return;
     const current = ensureSession();
     if (current) pushFixedSafety("", current);
-    if (!session) return;
-    const current = useSessionStore.getState().session;
-    if (
-      session.intake.emergencyDeclared &&
-      current &&
-      current.recommendations.length === 0
-    ) {
-      addRecommendation({
-        ...buildFixedSafetyRecommendation(
-          "",
-          useResponseModeStore.getState().responseMode,
-        ),
-        id: `rec-${Date.now()}`,
-        createdAtMs: Date.now() - session.startedAtMs,
-      });
-      stoppedRef.current = true;
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -747,7 +708,6 @@ export default function SessionLivePage() {
   };
 
   const handleEnd = () => {
-    stoppedRef.current = true;
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -933,7 +893,7 @@ export default function SessionLivePage() {
               <button
                 type="button"
                 className={actionButton}
-                onClick={handleSpeakClick}
+                onClick={handleCustomerSpeakClick}
                 disabled={!shown}
               >
                 <Volume2 size={18} />

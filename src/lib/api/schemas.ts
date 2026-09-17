@@ -25,6 +25,7 @@ export interface AnalyzeRequestBody {
   latestText: string;
   /** 직원이 등록한 매장 규정. 없으면 생략 가능(서버 기본값 []). */
   storeKnowledge?: StoreKnowledgeBody[];
+  responseMode: ResponseMode;
 }
 
 /** 새 API 응답은 실제 생성에 사용한 모드를 항상 포함한다. */
