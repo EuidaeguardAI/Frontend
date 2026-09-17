@@ -20,6 +20,14 @@ export interface Citation {
   label: string;
   section?: string;
   url?: string;
+  /**
+   * 근거 문서 본문에서 그대로 옮긴 문장. 검색된 청크에 실제로 있는 문장인지 서버가 대조한
+   * 뒤에만 채워진다(백엔드 app/graph/citations.py). 그래서 이 값이 있으면 화면에서
+   * 형광펜으로 강조해 "이 문장이 근거"라고 보여줘도 된다.
+   */
+  quote?: string;
+  /** 색인 당시 분류: manual | law | standard | notice | guide */
+  sourceType?: string;
 }
 
 export interface TranscriptSegment {

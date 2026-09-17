@@ -11,6 +11,9 @@ export const vars = createGlobalTheme(":root", {
     dangerLight: "#fef2f2",
     warning: "#d97706",
     warningLight: "#fffbeb",
+    // 답변 근거 문장에 긋는 형광펜. 경고(warning)와 섞이지 않게 별도 토큰으로 둔다.
+    highlight: "#fef08a",
+    highlightLine: "#ca8a04",
     text: "#111827",
     textMuted: "#6b7280",
     textFaint: "#9ca3af",

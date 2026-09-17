@@ -70,7 +70,9 @@ export function buildFixedSafetyRecommendation(
     sayNow: "지금은 대응하지 않고 거리를 확보하겠습니다.",
     nextActions,
     doNot,
-    citations: [{ label: "산업안전보건법 제41조", section: "건강장해 예방조치" }],
+    citations: [
+      { label: "산업안전보건법 제41조", section: "건강장해 예방조치", sourceType: "law" },
+    ],
     needsHumanReview: true,
     isFixedSafetyScript: true,
     expectedReplies: [],
