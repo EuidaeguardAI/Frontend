@@ -1,10 +1,18 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
+// 마이크를 못 쓸 때 쓰는 직접 입력줄. 예전에는 대화 목록 아래 본문에 있어서 스크롤에 묻혔다.
+// 지금은 액션바 바로 위에 고정으로 붙어 항상 같은 자리에 있다.
+export const manualBar = style({
+  padding: `${vars.space.xs} ${vars.space.md}`,
+  borderTop: `1px solid ${vars.color.border}`,
+  background: vars.color.white,
+});
+
 export const manualRow = style({
   display: "flex",
+  alignItems: "flex-end",
   gap: vars.space.xs,
-  marginTop: vars.space.sm,
 });
 
 export const manualInput = style({

@@ -1,33 +1,36 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowDown,
   Check,
   ChevronDown,
   ChevronUp,
-  History,
   Mic,
   MicOff,
   Pencil,
-  Plus,
   PhoneOff,
   Send,
   ShieldAlert,
+  Sparkles,
+  Trash2,
   User,
   Volume2,
 } from "lucide-react";
 import { MobileFrame } from "@/components/layout/MobileFrame";
+import {
+  CitationList,
+  citationSummary,
+} from "@/components/session/CitationList";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
-import { Drawer } from "@/components/ui/Drawer";
 import { SectionTitle } from "@/components/ui/SectionTitle";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { consultationClient } from "@/lib/api/consultationClient";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import { useHistoryStore } from "@/lib/store/historyStore";
-import { formatDuration, formatRelativeDay } from "@/lib/format";
 import {
   RISK_LABEL,
   type Recommendation,
@@ -37,41 +40,53 @@ import {
 } from "@/lib/types";
 import { buildFixedSafetyRecommendation } from "@/lib/safety/emergencyRules";
 import { textSimilarity } from "@/lib/text/similarity";
+import { isMeaninglessTranscript, isRepeatOfPrevious } from "@/lib/text/sttGuard";
+import {
+  MIN_VOICED_MS,
+  UNCERTAIN_VOICED_MS,
+  createVoiceActivityMonitor,
+  type VoiceActivityMonitor,
+} from "@/lib/mic/voiceActivity";
 import { vars } from "@/styles/theme.css";
 import {
   actionBar,
   actionButton,
+  actionList,
+  answerCard,
+  answerEmpty,
+  answerMarker,
+  answerMarkerActive,
+  answerPane,
+  backToLatest,
+  bubbleBody,
   bubbleRow,
   bubbleText,
-  citationDetail,
-  citationRow,
+  bubbleTextLow,
+  deleteButton,
+  deleteRow,
+  detailBody,
+  detailToggle,
   disclaimer,
   echoCheck,
+  echoTag,
   editArea,
-  actionList,
-  newSessionButton,
+  meter,
+  meterBar,
+  paneDivider,
+  paneHandle,
+  paneHandleLabel,
   quickReplyLabel,
   quickReplyRow,
   recommendationText,
-  sessionEmptyState,
-  sessionItem,
-  sessionItemActive,
-  sessionItemMeta,
-  sessionItemTitle,
-  sessionListLabel,
-  sessionTrigger,
   sourceTag,
   speakerIcon,
+  statusBar,
   topRow,
-  topRowRight,
-  transcriptArea,
-  turnBlock,
-  turnBlockPast,
+  transcriptEmpty,
+  transcriptPane,
   twoColActionBar,
-  waveBar,
-  waveform,
 } from "./page.css";
-import { manualInput, manualRow, manualSendButton } from "./manual.css";
+import { manualBar, manualInput, manualRow, manualSendButton } from "./manual.css";
 
 const RISK_TONE: Record<RiskLevel, "primary" | "warning" | "danger"> = {
   normal: "primary",
@@ -93,6 +108,16 @@ const ECHO_SIMILARITY_THRESHOLD = 0.6;
 // 새로 생성된 답변이 직전 답변과 사실상 같은 형태인지 판단하는 유사도 기준.
 // 에코 판단보다는 보수적으로 — 진짜 손님 발화에 대한 답인데 우연히 비슷한 경우까지 지우지 않도록.
 const DUPLICATE_SIMILARITY_THRESHOLD = 0.75;
+// 인식 결과가 이보다 짧으면 "잘못 들었을 수 있음"으로 표시한다(분석은 그대로 한다).
+const LOW_CONFIDENCE_TEXT_LENGTH = 6;
+
+type PaneSize = "sm" | "md" | "lg";
+const PANE_SIZE_ORDER: PaneSize[] = ["sm", "md", "lg"];
+const PANE_SIZE_LABEL: Record<PaneSize, string> = {
+  sm: "대화 작게",
+  md: "대화 보통",
+  lg: "대화 크게",
+};
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === "undefined") return "";
@@ -127,30 +152,48 @@ export default function SessionLivePage() {
   const session = useSessionStore((state) => state.session);
   const muted = useSessionStore((state) => state.muted);
   const appendTranscript = useSessionStore((state) => state.appendTranscript);
+  const removeTurn = useSessionStore((state) => state.removeTurn);
   const addRecommendation = useSessionStore((state) => state.addRecommendation);
   const addAction = useSessionStore((state) => state.addAction);
   const toggleMute = useSessionStore((state) => state.toggleMute);
   const completeSession = useSessionStore((state) => state.complete);
-  const resetSession = useSessionStore((state) => state.reset);
   const addHistorySession = useHistoryStore((state) => state.addSession);
-  const historySessions = useHistoryStore((state) => state.sessions);
 
-  const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
-  const [expandedCitationId, setExpandedCitationId] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
+  // 아래 세 가지는 "어느 답변에 대한 상태인지"를 함께 들고 있는다. 새 답변이 오면
+  // 그 id가 더 이상 맞지 않게 되어 자동으로 초기 상태로 돌아간다(effect에서 초기화하지 않는다).
+  const [detailsOpenFor, setDetailsOpenFor] = useState<string | null>(null);
+  const [editingFor, setEditingFor] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [warningSent, setWarningSent] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [manualText, setManualText] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [paneSize, setPaneSize] = useState<PaneSize>("md");
+  // 대화 창에서 지난 답변 마커를 눌러 아래 패널에 띄워 둔 답변. null이면 항상 최신 답변을 보여준다.
+  // 띄울 당시의 최신 답변 id를 같이 들고 있어서, 새 답변이 도착하면 이 고정이 저절로 풀린다 —
+  // 상담 중에는 최신 답변이 보여야 한다.
+  const [pinned, setPinned] = useState<{ id: string; latestIdWhenPinned: string } | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // 지금 말소리가 들어오고 있는지(상태 문구용). 레벨 미터는 리렌더 없이 따로 그린다.
+  const [hearing, setHearing] = useState(false);
+
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const answerRef = useRef<HTMLDivElement>(null);
   const stoppedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const vadRef = useRef<VoiceActivityMonitor | null>(null);
   const manualInputRef = useRef<HTMLTextAreaElement>(null);
+  // 직전 인식 결과. 같은 문장이 계속 반복되는 환각 루프를 걸러내는 데만 쓴다.
+  const lastSttTextRef = useRef<string | null>(null);
+  // 분석 요청 순번. 분석을 더 이상 기다리지 않고 녹음을 이어가므로 두 분석이 겹칠 수 있는데,
+  // 그때 늦게 끝난 옛 요청이 최신 답변을 덮어쓰지 않도록 순번으로 막는다.
+  const analysisSeqRef = useRef(0);
 
   const runAnalysis = async (latestText: string) => {
     const current = useSessionStore.getState().session;
     if (!current) return;
+    const seq = analysisSeqRef.current + 1;
+    analysisSeqRef.current = seq;
     setAnalyzing(true);
     try {
       const recommendation = await consultationClient.analyze({
@@ -164,28 +207,42 @@ export default function SessionLivePage() {
           .map((recommendation) => recommendation.situation),
         latestText,
       });
+      // 이 요청이 도는 사이 더 최신 발화에 대한 분석이 시작됐다면 이 결과는 버린다.
+      if (seq !== analysisSeqRef.current) return;
       // 손님 발화는 새로 들어왔지만 결과 답변이 직전 답변과 사실상 같은 형태라면
       // 카드를 또 쌓지 않는다 — 상담원 입장에서는 같은 답변이 반복 노출될 뿐이다.
-      const prevRecommendation = current.recommendations[current.recommendations.length - 1];
+      const store = useSessionStore.getState().session;
+      const prevRecommendation = store?.recommendations[store.recommendations.length - 1];
       const isDuplicate =
         prevRecommendation != null &&
         prevRecommendation.situation === recommendation.situation &&
         textSimilarity(prevRecommendation.sayNow, recommendation.sayNow) >=
           DUPLICATE_SIMILARITY_THRESHOLD;
       if (!isDuplicate) {
-        addRecommendation(recommendation);
+        // 백엔드는 createdAtMs를 절대 시각(epoch ms)으로 채워 보내지만, 화면과 이력은
+        // "상담 시작 후 몇 초"라는 상대 시각을 쓴다(transcript.timestampMs와 같은 축).
+        // 그대로 두면 추천이 항상 모든 발화보다 뒤로 정렬돼 손님 말과 짝이 지어지지 않고,
+        // 이력 화면의 경과 시간도 엉뚱하게 찍힌다.
+        addRecommendation({
+          ...recommendation,
+          createdAtMs: Date.now() - current.startedAtMs,
+        });
         if (recommendation.isFixedSafetyScript) stoppedRef.current = true;
       }
     } catch (error) {
       console.error("[session/live] analyze failed", error);
     } finally {
-      setAnalyzing(false);
+      if (seq === analysisSeqRef.current) setAnalyzing(false);
     }
   };
 
   // STT/수동 입력/예상 답변 칩 — 손님 발화로 취급될 모든 입력이 거치는 공통 경로.
   // 직전 "추천 답변"을 직원이 그대로 읽은 것처럼 들리면(echo) 새 분석 없이 기록만 남긴다.
-  const submitCustomerUtterance = async (text: string, source: TranscriptSource) => {
+  const submitCustomerUtterance = async (
+    text: string,
+    source: TranscriptSource,
+    options?: { lowConfidence?: boolean },
+  ) => {
     const current = useSessionStore.getState().session;
     if (!current) return;
     const latestRecommendation = current.recommendations[current.recommendations.length - 1];
@@ -198,6 +255,7 @@ export default function SessionLivePage() {
       source,
       speaker: isEcho ? "staff" : "customer",
       text,
+      lowConfidence: options?.lowConfidence,
       timestampMs: Date.now() - current.startedAtMs,
     };
     appendTranscript(segment);
@@ -227,7 +285,7 @@ export default function SessionLivePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
-  // 실시간 녹음 → STT → 분석 루프
+  // 실시간 녹음 → (무음 판정) → STT → 분석 루프
   useEffect(() => {
     if (!session) {
       router.replace("/session/intake");
@@ -249,6 +307,8 @@ export default function SessionLivePage() {
           return;
         }
         streamRef.current = stream;
+        // 녹음과 같은 스트림에 분석 노드만 붙여 실제 말소리 여부를 잰다.
+        vadRef.current = createVoiceActivityMonitor(stream);
         const mimeType = pickMimeType();
 
         while (!stoppedRef.current && !cancelled) {
@@ -257,9 +317,16 @@ export default function SessionLivePage() {
             continue;
           }
 
+          vadRef.current?.beginWindow();
           const blob = await recordChunk(stream, CHUNK_MS, mimeType);
+          const activity = vadRef.current?.endWindow();
           if (stoppedRef.current || cancelled) break;
           if (blob.size < MIN_CHUNK_BYTES) continue;
+
+          // 무음 게이트 — 이 10초 동안 소음 바닥보다 뚜렷하게 큰 소리가 거의 없었다면
+          // 인식 요청 자체를 하지 않는다. 무음을 보내면 모델이 문장을 지어내고, 그 문장이
+          // 손님 발화가 되어 아무도 말하지 않았는데 답변과 위험도가 만들어진다.
+          if (activity && activity.voicedMs < MIN_VOICED_MS) continue;
 
           let text = "";
           try {
@@ -268,9 +335,21 @@ export default function SessionLivePage() {
             console.error("[session/live] transcribe failed", error);
             continue;
           }
-          if (stoppedRef.current || cancelled || !text.trim()) continue;
+          if (stoppedRef.current || cancelled) continue;
 
-          await submitCustomerUtterance(text.trim(), "stt_raw");
+          const trimmed = text.trim();
+          // 백엔드에서 환각 문구로 걸러지면 빈 문자열로 온다.
+          if (!trimmed) continue;
+          if (isMeaninglessTranscript(trimmed)) continue;
+          if (isRepeatOfPrevious(trimmed, lastSttTextRef.current)) continue;
+          lastSttTextRef.current = trimmed;
+
+          const lowConfidence =
+            trimmed.length < LOW_CONFIDENCE_TEXT_LENGTH ||
+            (activity != null && activity.voicedMs < UNCERTAIN_VOICED_MS);
+
+          // 분석을 기다리지 않는다. 기다리면 그 3~5초 동안 녹음이 멈춰 손님 말이 통째로 빠진다.
+          void submitCustomerUtterance(trimmed, "stt_raw", { lowConfidence });
         }
       } catch (error) {
         console.error("[session/live] mic error", error);
@@ -285,21 +364,37 @@ export default function SessionLivePage() {
     return () => {
       cancelled = true;
       stoppedRef.current = true;
+      vadRef.current?.close();
+      vadRef.current = null;
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
+  // 상태 문구("말소리 감지" / "조용함")용. 값이 바뀔 때만 리렌더된다.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
+    const timer = window.setInterval(() => {
+      setHearing(vadRef.current?.isVoiced() ?? false);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const recommendations = useMemo(() => session?.recommendations ?? [], [session]);
+  const latest = recommendations[recommendations.length - 1];
+
+  // 보고 있는 답변이 바뀌면 답변 패널은 맨 위부터 보여준다.
+  useEffect(() => {
+    answerRef.current?.scrollTo({ top: 0 });
+  }, [latest?.id]);
+
+  // 대화 패널은 항상 마지막 발화가 보이게 둔다(답변 패널은 이 스크롤과 무관하다).
+  useEffect(() => {
+    transcriptRef.current?.scrollTo({
+      top: transcriptRef.current.scrollHeight,
       behavior: "smooth",
     });
   }, [session?.transcript.length, session?.recommendations.length]);
-
-  const recommendations = session?.recommendations ?? [];
-  const latest = recommendations[recommendations.length - 1];
 
   const isThreatAlert = latest?.situation === "threat" && !latest.isFixedSafetyScript;
   const isFixedSafety = Boolean(latest?.isFixedSafetyScript);
@@ -377,6 +472,24 @@ export default function SessionLivePage() {
     return turns;
   }, [session]);
 
+  const echoByRecommendationId = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const turn of feed) {
+      if (turn.recommendation) map.set(turn.recommendation.id, turn.echoConfirmed);
+    }
+    return map;
+  }, [feed]);
+
+  // 고정해 둔 답변은 그 뒤로 새 답변이 오지 않았을 때만 유효하다.
+  const pinnedRecommendation =
+    pinned && pinned.latestIdWhenPinned === latest?.id
+      ? recommendations.find((recommendation) => recommendation.id === pinned.id)
+      : undefined;
+  const shown = pinnedRecommendation ?? latest;
+  const isShowingLatest = shown != null && shown.id === latest?.id;
+  const editing = editingFor != null && editingFor === latest?.id;
+  const detailsOpen = detailsOpenFor != null && detailsOpenFor === shown?.id;
+
   const speak = (text: string) => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -387,13 +500,20 @@ export default function SessionLivePage() {
   };
 
   const handleEditToggle = () => {
-    if (!editing && latest) setEditText(latest.sayNow);
-    setEditing((value) => !value);
+    if (!latest) return;
+    if (editing) {
+      setEditingFor(null);
+      return;
+    }
+    // 수정은 항상 최신 답변에 대해서만 — 지난 답변을 보고 있었다면 최신으로 되돌린다.
+    setPinned(null);
+    setEditText(latest.sayNow);
+    setEditingFor(latest.id);
   };
 
   const handleSpeakClick = () => {
-    if (!latest) return;
-    speak(editing ? editText : latest.sayNow);
+    if (!shown) return;
+    speak(editing && isShowingLatest ? editText : shown.sayNow);
     addAction("음성으로 답변");
   };
 
@@ -413,22 +533,6 @@ export default function SessionLivePage() {
     addAction("상담 계속");
   };
 
-  // 우측 상단 Drawer의 "새 세션 시작": 지금 상담은 기록으로 저장해 두고
-  // 완전히 새로운 대화 세션으로 넘어간다(상담 종료 화면을 거치지 않음).
-  const handleNewSession = () => {
-    stoppedRef.current = true;
-    const completed = completeSession();
-    if (completed) addHistorySession(completed);
-    resetSession();
-    setSessionDrawerOpen(false);
-    router.push("/session/intake");
-  };
-
-  const handleSelectHistorySession = (id: string) => {
-    setSessionDrawerOpen(false);
-    router.push(`/history/${id}`);
-  };
-
   const handleSendWarning = () => {
     addAction("경고 전송");
     setWarningSent(true);
@@ -436,6 +540,18 @@ export default function SessionLivePage() {
 
   const handleReport = () => {
     router.push("/session/report");
+  };
+
+  const cyclePaneSize = () => {
+    setPaneSize((size) => PANE_SIZE_ORDER[(PANE_SIZE_ORDER.indexOf(size) + 1) % 3]);
+  };
+
+  // 잘못 인식된 발화를 지운다. 그 발화를 근거로 만들어진 답변도 같이 지워야
+  // 화면에 "아무도 하지 않은 말에 대한 답변"이 남지 않는다.
+  const handleDeleteSegment = (segmentId: string, recommendationId?: string) => {
+    removeTurn([segmentId], recommendationId);
+    setConfirmDeleteId(null);
+    if (recommendationId && pinned?.id === recommendationId) setPinned(null);
   };
 
   const autoResizeManualInput = () => {
@@ -460,146 +576,121 @@ export default function SessionLivePage() {
     await submitCustomerUtterance(text, "user_input");
   };
 
-  const riskTone = latest ? RISK_TONE[latest.situation] : "primary";
+  const getLevel = useCallback(() => vadRef.current?.level() ?? 0, []);
 
-  const summary = useMemo(() => {
+  const riskTone = shown ? RISK_TONE[shown.situation] : "primary";
+
+  const statusText = useMemo(() => {
+    if (muted) return "음소거됨";
     if (analyzing) return "분석 중...";
-    if (!latest) return "듣고 있어요";
-    return RISK_LABEL[latest.situation];
-  }, [latest, analyzing]);
+    if (showManualInput) return "직접 입력 모드";
+    return hearing ? "말소리 감지" : "조용함 · 듣는 중";
+  }, [muted, analyzing, showManualInput, hearing]);
 
   if (!session) return null;
 
   return (
     <MobileFrame
+      variant="fixed"
       footer={
-        isThreatAlert ? (
-          <div className={twoColActionBar}>
-            <button type="button" className={actionButton} onClick={handleContinue}>
-              상담 계속
-            </button>
-            <button
-              type="button"
-              className={actionButton}
-              onClick={handleSendWarning}
-              style={{ color: vars.color.danger, borderColor: vars.color.danger }}
-            >
-              {warningSent ? "경고 전송됨" : "경고 전송"}
-            </button>
-          </div>
-        ) : isFixedSafety ? (
-          <div className={twoColActionBar}>
-            <button
-              type="button"
-              className={actionButton}
-              onClick={handleReport}
-              style={{ color: vars.color.danger, borderColor: vars.color.danger }}
-            >
-              <ShieldAlert size={18} />
-              신고하기
-            </button>
-            <button type="button" className={actionButton} onClick={handleEnd}>
-              <PhoneOff size={18} />
-              상담 종료
-            </button>
-          </div>
-        ) : (
-          <div className={actionBar}>
-            <button type="button" className={actionButton} onClick={handleEditToggle}>
-              <Pencil size={18} />
-              수정
-            </button>
-            <button type="button" className={actionButton} onClick={handleSpeakClick}>
-              <Volume2 size={18} />
-              음성으로 답변
-            </button>
-            <button type="button" className={actionButton} onClick={handleMuteClick}>
-              {muted ? <MicOff size={18} /> : <Mic size={18} />}
-              음소거
-            </button>
-            <button
-              type="button"
-              className={actionButton}
-              onClick={handleEnd}
-              style={{ color: vars.color.danger, borderColor: vars.color.danger }}
-            >
-              <PhoneOff size={18} />
-              상담 종료
-            </button>
-          </div>
-        )
-      }
-      overlay={
-        <Drawer
-          open={sessionDrawerOpen}
-          onClose={() => setSessionDrawerOpen(false)}
-          title="대화 세션"
-        >
-          <button type="button" className={newSessionButton} onClick={handleNewSession}>
-            <Plus size={16} />
-            새 세션 시작
-          </button>
-
-          <p className={sessionListLabel}>진행 중</p>
-          <div className={`${sessionItem} ${sessionItemActive}`}>
-            <span className={sessionItemTitle}>{session.title}</span>
-            <span className={sessionItemMeta}>
-              <span>{formatRelativeDay(session.startedAtMs)}</span>
-              <span>현재 상담</span>
-            </span>
-          </div>
-
-          <p className={sessionListLabel}>지난 세션</p>
-          {historySessions.length === 0 ? (
-            <p className={sessionEmptyState}>지난 상담 기록이 없습니다.</p>
-          ) : (
-            historySessions.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={sessionItem}
-                onClick={() => handleSelectHistorySession(item.id)}
-              >
-                <span className={sessionItemTitle}>{item.title}</span>
-                <span className={sessionItemMeta}>
-                  <span>{formatRelativeDay(item.startedAtMs)}</span>
-                  {item.endedAtMs && (
-                    <span>{formatDuration(item.endedAtMs - item.startedAtMs)}</span>
-                  )}
-                </span>
-              </button>
-            ))
+        <>
+          {showManualInput && !isFixedSafety && (
+            <div className={manualBar}>
+              <div className={manualRow}>
+                <textarea
+                  ref={manualInputRef}
+                  className={manualInput}
+                  placeholder="고객이 한 말을 입력하세요"
+                  value={manualText}
+                  rows={1}
+                  onChange={(event) => {
+                    setManualText(event.target.value);
+                    autoResizeManualInput();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      void handleManualSubmit();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className={manualSendButton}
+                  onClick={() => void handleManualSubmit()}
+                  aria-label="전송"
+                >
+                  <Send size={16} />
+                </button>
+              </div>
+            </div>
           )}
-        </Drawer>
+          {isThreatAlert ? (
+            <div className={twoColActionBar}>
+              <button type="button" className={actionButton} onClick={handleContinue}>
+                상담 계속
+              </button>
+              <button
+                type="button"
+                className={actionButton}
+                onClick={handleSendWarning}
+                style={{ color: vars.color.danger, borderColor: vars.color.danger }}
+              >
+                {warningSent ? "경고 전송됨" : "경고 전송"}
+              </button>
+            </div>
+          ) : isFixedSafety ? (
+            <div className={twoColActionBar}>
+              <button
+                type="button"
+                className={actionButton}
+                onClick={handleReport}
+                style={{ color: vars.color.danger, borderColor: vars.color.danger }}
+              >
+                <ShieldAlert size={18} />
+                신고하기
+              </button>
+              <button type="button" className={actionButton} onClick={handleEnd}>
+                <PhoneOff size={18} />
+                상담 종료
+              </button>
+            </div>
+          ) : (
+            <div className={actionBar}>
+              <button type="button" className={actionButton} onClick={handleEditToggle}>
+                <Pencil size={18} />
+                수정
+              </button>
+              <button type="button" className={actionButton} onClick={handleSpeakClick}>
+                <Volume2 size={18} />
+                음성으로 답변
+              </button>
+              <button type="button" className={actionButton} onClick={handleMuteClick}>
+                {muted ? <MicOff size={18} /> : <Mic size={18} />}
+                음소거
+              </button>
+              <button
+                type="button"
+                className={actionButton}
+                onClick={handleEnd}
+                style={{ color: vars.color.danger, borderColor: vars.color.danger }}
+              >
+                <PhoneOff size={18} />
+                상담 종료
+              </button>
+            </div>
+          )}
+        </>
       }
     >
-      <div className={topRow}>
-        <StatusPill>{muted ? "음소거됨" : summary}</StatusPill>
-        <div className={topRowRight}>
-          {latest && (
-            <Badge tone={riskTone}>
-              위험도 {latest.riskLevel} · {RISK_LABEL[latest.situation]}
-            </Badge>
-          )}
-          <button
-            type="button"
-            className={sessionTrigger}
-            aria-label="대화 세션 목록"
-            onClick={() => setSessionDrawerOpen(true)}
-          >
-            <History size={16} />
-          </button>
-        </div>
-      </div>
-
-      <div className={waveform} aria-hidden>
-        {Array.from({ length: 24 }).map((_, index) => (
-          <span
-            key={index}
-            className={waveBar}
-            style={{ animationDelay: `${(index % 6) * 0.12}s` }}
-          />
-        ))}
+      <div className={statusBar}>
+        <StatusPill>{statusText}</StatusPill>
+        {!showManualInput && <LevelMeter getLevel={getLevel} muted={muted} />}
+        {shown && (
+          <Badge tone={riskTone}>
+            위험도 {shown.riskLevel} · {RISK_LABEL[shown.situation]}
+          </Badge>
+        )}
       </div>
 
       {micError && (
@@ -608,109 +699,184 @@ export default function SessionLivePage() {
         </Card>
       )}
 
-      <div>
-        <SectionTitle>대화</SectionTitle>
-        <div className={transcriptArea} ref={scrollRef}>
-          {feed.map((turn) => {
-            const isLatestTurn = turn.recommendation?.id === latest?.id;
-            return (
-              <div
-                key={turn.id}
-                className={`${turnBlock} ${isLatestTurn ? "" : turnBlockPast}`}
-              >
-                {turn.customerSegments.map((segment) => (
-                  <div key={segment.id} className={bubbleRow}>
-                    <span
-                      className={speakerIcon}
-                      style={{
-                        background:
-                          segment.speaker === "ai"
-                            ? vars.color.primaryLight
-                            : vars.color.surfaceMuted,
-                        color:
-                          segment.speaker === "ai" ? vars.color.primary : vars.color.textMuted,
-                      }}
+      <div className={transcriptPane[paneSize]} ref={transcriptRef}>
+        {feed.length === 0 ? (
+          <p className={transcriptEmpty}>
+            손님 말이 인식되면 여기에 표시됩니다.
+            <br />
+            조용할 때는 아무것도 기록하지 않습니다.
+          </p>
+        ) : (
+          feed.map((turn) => (
+            <Fragment key={turn.id}>
+              {turn.customerSegments.map((segment) => (
+                <div key={segment.id} className={bubbleRow}>
+                  <span className={speakerIcon}>
+                    <User size={14} />
+                  </span>
+                  <div className={bubbleBody}>
+                    <p
+                      className={segment.lowConfidence ? bubbleTextLow : bubbleText}
+                      onClick={
+                        segment.lowConfidence
+                          ? () =>
+                              setConfirmDeleteId((id) => (id === segment.id ? null : segment.id))
+                          : undefined
+                      }
                     >
-                      <User size={16} />
-                    </span>
-                    <div>
-                      <p className={bubbleText}>{segment.text}</p>
-                      <p className={sourceTag}>
-                        {segment.source === "stt_raw" && "실시간 인식"}
-                        {segment.source === "ai_corrected" && "AI 분석"}
-                        {segment.source === "user_input" && "사용자 입력"}
-                      </p>
-                    </div>
+                      {segment.text}
+                    </p>
+                    <p className={sourceTag}>
+                      {segment.source === "stt_raw" && "실시간 인식"}
+                      {segment.source === "ai_corrected" && "AI 분석"}
+                      {segment.source === "user_input" && "직접 입력"}
+                      {segment.lowConfidence && " · 잘못 들었을 수 있음"}
+                    </p>
+                    {confirmDeleteId === segment.id && (
+                      <div className={deleteRow}>
+                        <button
+                          type="button"
+                          className={deleteButton}
+                          onClick={() =>
+                            handleDeleteSegment(segment.id, turn.recommendation?.id)
+                          }
+                        >
+                          <Trash2 size={12} />
+                          이 말과 답변 삭제
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ))}
+                </div>
+              ))}
 
-                {turn.recommendation && (
-                  <RecommendationBubble
-                    recommendation={turn.recommendation}
-                    isLatest={isLatestTurn}
-                    echoConfirmed={turn.echoConfirmed}
-                    editing={editing}
-                    editText={editText}
-                    onEditTextChange={setEditText}
-                    expanded={expandedCitationId === turn.recommendation.id}
-                    onToggleCitations={() =>
-                      setExpandedCitationId((id) =>
-                        id === turn.recommendation!.id ? null : turn.recommendation!.id,
-                      )
-                    }
-                    onQuickReply={handleQuickReply}
-                    quickReplyDisabled={analyzing}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {showManualInput && !isFixedSafety && (
-          <div className={manualRow}>
-            <textarea
-              ref={manualInputRef}
-              className={manualInput}
-              placeholder="고객이 한 말을 입력하세요"
-              value={manualText}
-              rows={1}
-              onChange={(event) => {
-                setManualText(event.target.value);
-                autoResizeManualInput();
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void handleManualSubmit();
-                }
-              }}
-            />
-            <button
-              type="button"
-              className={manualSendButton}
-              onClick={() => void handleManualSubmit()}
-              aria-label="전송"
-            >
-              <Send size={16} />
-            </button>
-          </div>
+              {turn.recommendation && (
+                <button
+                  type="button"
+                  className={`${answerMarker} ${
+                    shown?.id === turn.recommendation.id ? answerMarkerActive : ""
+                  }`}
+                  onClick={() =>
+                    setPinned(
+                      !latest || turn.recommendation!.id === latest.id
+                        ? null
+                        : { id: turn.recommendation!.id, latestIdWhenPinned: latest.id },
+                    )
+                  }
+                >
+                  <Sparkles size={12} />
+                  답변 제안됨
+                  {turn.echoConfirmed && (
+                    <span className={echoTag}>
+                      <Check size={12} />
+                      답변함
+                    </span>
+                  )}
+                </button>
+              )}
+            </Fragment>
+          ))
         )}
       </div>
 
+      <button
+        type="button"
+        className={paneDivider}
+        onClick={cyclePaneSize}
+        aria-label={`대화 창 크기 바꾸기 (현재 ${PANE_SIZE_LABEL[paneSize]})`}
+      >
+        <span className={paneHandle} />
+        <span className={paneHandleLabel}>{PANE_SIZE_LABEL[paneSize]}</span>
+      </button>
+
+      <div className={answerPane} ref={answerRef}>
+        {shown ? (
+          <>
+            {!isShowingLatest && (
+              <button
+                type="button"
+                className={backToLatest}
+                onClick={() => setPinned(null)}
+              >
+                <ArrowDown size={12} />
+                최신 답변으로
+              </button>
+            )}
+            <AnswerCard
+              recommendation={shown}
+              isLatest={isShowingLatest}
+              echoConfirmed={echoByRecommendationId.get(shown.id) ?? false}
+              editing={editing && isShowingLatest}
+              editText={editText}
+              onEditTextChange={setEditText}
+              detailsOpen={detailsOpen}
+              onToggleDetails={() =>
+                setDetailsOpenFor((id) => (id === shown.id ? null : shown.id))
+              }
+              onQuickReply={handleQuickReply}
+              quickReplyDisabled={analyzing}
+            />
+          </>
+        ) : (
+          <p className={answerEmpty}>
+            {analyzing ? "답변을 만들고 있습니다..." : "손님 말이 들어오면 추천 답변이 여기에 뜹니다."}
+          </p>
+        )}
+      </div>
     </MobileFrame>
   );
 }
 
-function RecommendationBubble({
+/**
+ * 마이크 입력 레벨 미터. 값이 초당 수십 번 바뀌므로 React 상태로 두면 화면 전체가 계속
+ * 리렌더된다. 그래서 막대의 transform만 직접 건드린다.
+ */
+function LevelMeter({ getLevel, muted }: { getLevel: () => number; muted: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let frame = 0;
+    const tick = () => {
+      const container = containerRef.current;
+      if (container) {
+        const level = muted ? 0 : getLevel();
+        const bars = container.children;
+        for (let i = 0; i < bars.length; i += 1) {
+          // 가운데 막대가 가장 크게 반응하도록 가중치를 준다(파형처럼 보이게).
+          const weight = 0.45 + 0.55 * Math.sin((Math.PI * (i + 0.5)) / bars.length);
+          const scale = Math.max(0.1, Math.min(1, level * weight * 1.6));
+          (bars[i] as HTMLElement).style.transform = `scaleY(${scale.toFixed(3)})`;
+        }
+      }
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [getLevel, muted]);
+
+  return (
+    <div
+      className={meter}
+      ref={containerRef}
+      style={{ opacity: muted ? 0.3 : 1 }}
+      aria-hidden
+    >
+      {Array.from({ length: 16 }).map((_, index) => (
+        <span key={index} className={meterBar} />
+      ))}
+    </div>
+  );
+}
+
+function AnswerCard({
   recommendation,
   isLatest,
   echoConfirmed,
   editing,
   editText,
   onEditTextChange,
-  expanded,
-  onToggleCitations,
+  detailsOpen,
+  onToggleDetails,
   onQuickReply,
   quickReplyDisabled,
 }: {
@@ -720,16 +886,19 @@ function RecommendationBubble({
   editing: boolean;
   editText: string;
   onEditTextChange: (value: string) => void;
-  expanded: boolean;
-  onToggleCitations: () => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
   onQuickReply: (text: string) => void;
   quickReplyDisabled: boolean;
 }) {
   const isFixedSafety = recommendation.isFixedSafetyScript;
   const isThreatAlert = recommendation.situation === "threat" && !isFixedSafety;
+  const tone = isFixedSafety ? "danger" : isThreatAlert ? "warning" : "primary";
+  const hasDetails =
+    recommendation.nextActions.length > 0 || recommendation.citations.length > 0;
 
   return (
-    <Card tone={isFixedSafety ? "danger" : isThreatAlert ? "warning" : "primary"}>
+    <div className={answerCard[tone]}>
       <div className={topRow}>
         <SectionTitle>
           {isFixedSafety ? "안전 절차" : isThreatAlert ? "위협성 발언 감지" : "추천 답변"}
@@ -737,7 +906,7 @@ function RecommendationBubble({
         {!isLatest && <span className={sourceTag}>이전 답변</span>}
       </div>
 
-      {isLatest && editing ? (
+      {editing ? (
         <textarea
           className={editArea}
           value={editText}
@@ -747,17 +916,7 @@ function RecommendationBubble({
         <p className={recommendationText}>{recommendation.sayNow}</p>
       )}
 
-      {recommendation.nextActions.length > 0 && (
-        <ul className={actionList}>
-          {recommendation.nextActions.map((action) => (
-            <li key={action}>{action}</li>
-          ))}
-        </ul>
-      )}
-
-      {isThreatAlert && (
-        <p className={disclaimer}>※ 법률상 확정 판단이 아닌 운영 안내</p>
-      )}
+      {isThreatAlert && <p className={disclaimer}>※ 법률상 확정 판단이 아닌 운영 안내</p>}
 
       {echoConfirmed && (
         <p className={echoCheck}>
@@ -783,31 +942,45 @@ function RecommendationBubble({
         </div>
       )}
 
-      {recommendation.citations.length > 0 && (
+      {hasDetails && (
         <>
-          <div className={citationRow} onClick={onToggleCitations}>
+          <button type="button" className={detailToggle} onClick={onToggleDetails}>
             <span>
-              답변 근거 · {recommendation.citations[0].label}
-              {recommendation.citations[0].section
-                ? ` ${recommendation.citations[0].section}`
-                : ""}
+              {recommendation.nextActions.length > 0 &&
+                `다음 행동 ${recommendation.nextActions.length}`}
+              {recommendation.nextActions.length > 0 &&
+                recommendation.citations.length > 0 &&
+                " · "}
+              {recommendation.citations.length > 0 &&
+                `답변 근거 ${citationSummary(recommendation.citations)}`}
             </span>
-            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </div>
-          {expanded && (
-            <div className={citationDetail}>
-              {recommendation.citations.map((citation) => (
-                <p key={citation.label + citation.section}>
-                  {citation.label} {citation.section}
-                </p>
-              ))}
-              {recommendation.needsHumanReview && (
-                <p>상담사가 답변을 검토 중입니다.</p>
+            {detailsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {detailsOpen && (
+            <div className={detailBody}>
+              {recommendation.nextActions.length > 0 && (
+                <ul className={actionList}>
+                  {recommendation.nextActions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ul>
               )}
+              {recommendation.citations.length > 0 && (
+                <CitationList
+                  citations={recommendation.citations}
+                  note={
+                    recommendation.needsHumanReview
+                      ? "상담사가 답변을 검토 중입니다."
+                      : undefined
+                  }
+                />
+              )}
+              {recommendation.citations.length === 0 &&
+                recommendation.needsHumanReview && <p>상담사가 답변을 검토 중입니다.</p>}
             </div>
           )}
         </>
       )}
-    </Card>
+    </div>
   );
 }
